@@ -1,4 +1,6 @@
 **/test*.py
 **/*.pyc
 .idea/
-
+build/
+dist/
+Lunas.egg-info/
