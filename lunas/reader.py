@@ -1,5 +1,5 @@
 import abc
-from typing import List, Iterable, Dict, Callable, Tuple, Any, TextIO
+from typing import List, Iterable, Dict, Callable, Tuple, Any
 
 import numpy
 from overrides import overrides
@@ -155,7 +155,7 @@ class BaseReader(Iterable, Persistable):
         """
         raise NotImplementedError
 
-    def __iter__(self) -> Iterable:
+    def __iter__(self):
         """Returns an iterator of this dataset.
 
         """
@@ -301,6 +301,9 @@ class Reader(BaseReader):
             return next(self)
         return sample
 
+    def __iter__(self) -> BaseReader:
+        return super().__iter__()
+
     def shuffle(self, buffer_size: int = 10000, num_threads: int = 1) -> BaseReader:
         return ShuffleReader(self, buffer_size, num_threads)
 
@@ -316,7 +319,9 @@ class ShuffleReader(Reader):
         return len(self.reader)
 
     def next(self) -> Any:
-        return self.reader.next()
+        rv = next(self.reader)
+        # print(rv)
+        return rv
 
     def _shuffle_buffer(self):
         self._random_state = numpy.random.get_state()
@@ -327,6 +332,10 @@ class ShuffleReader(Reader):
         rv = super()._fill_buffer()
         self._shuffle_buffer()
         return rv
+
+    def finalize(self):
+        self.reader.finalize()
+        super().finalize()
 
     @overrides
     def __iter__(self) -> Iterable:
@@ -349,11 +358,16 @@ class ZipReader(Reader):
 
     @overrides
     def next(self):
-        sample = tuple(r.next() for r in self.readers)
+        sample = tuple(next(r) for r in self.readers)
         if any(s is None for s in sample):
             sample = None
 
         return sample
+
+    def finalize(self):
+        for reader in self.readers:
+            reader.finalize()
+        super().finalize()
 
     @overrides
     def __iter__(self) -> Iterable:
@@ -405,6 +419,3 @@ class RangeReader(Reader):
     @overrides
     def next(self) -> Any:
         return next(self._range)
-
-
-

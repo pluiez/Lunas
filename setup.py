@@ -1,5 +1,6 @@
 import sys
-from setuptools import setup,find_packages
+
+from setuptools import setup, find_packages
 
 if sys.version_info < (3,):
     sys.exit('Sorry, Python3 is required for thseq.')
@@ -7,10 +8,9 @@ if sys.version_info < (3,):
 with open('requirements.txt') as r:
     requires = [l.strip() for l in r]
 
-
 setup(
     name='Lunas',
-    version='0.1.1',
+    version='0.1.4',
     author='Seann Zhang',
     author_email='pluiefox@live.com',
     packages=find_packages(),

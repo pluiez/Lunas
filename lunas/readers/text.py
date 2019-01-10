@@ -33,8 +33,9 @@ class TextReader(Reader):
 
     @overrides
     def finalize(self):
+        if self._fd is not None:
+            self._fd.close()
         super().finalize()
-        self._fd.close()
 
     @overrides
     def next(self) -> Any:
