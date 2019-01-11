@@ -1,6 +1,6 @@
 # Lunas
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.1.8-limegreen.svg)](https://github.com/pluiez/lunas)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.1.9-limegreen.svg)](https://github.com/pluiez/lunas)
 
 **Lunas** is a Python 3-based library that provides a set of simple interfaces for data processing pipelines and an iterator for looping through data.
 
