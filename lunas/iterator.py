@@ -47,14 +47,14 @@ class DataIterator(Persistable):
         self.collate_fn = collate_fn
 
         # bookkeeping params
-        self.step_in_epoch = 0
-        self.step = 0
+        self.step_in_epoch = -1
+        self.step = -1
         self.epoch = 0
 
         self.cache = Cache(cache_size, sample_size_fn)
         self.remains = []
 
-        self._exclusions = ['batch_size_fn', 'collate_fn', 'cache', 'sort_desc_by', '_reader_iter']
+        self._exclusions = ['sample_size_fn', 'collate_fn', 'sort_desc_by']
 
         self.check_batch_size(batch_size, cache_size)
         self.reset()
@@ -80,9 +80,17 @@ class DataIterator(Persistable):
 
         """
         cache_size = cache_size or self.cache_size
-        if batch_size >= cache_size:
+        if batch_size > cache_size:
             raise RuntimeError(f'Batch size should be less than cache size. '
-                               f'Got batch_size = {batch_size} and cache_size = {cache_size}')
+                               f'Got batch_size = {batch_size} and cache_size = {cache_size}.')
+
+    def reset(self):
+        self.step_in_epoch = -1
+        self.step = -1
+        self.epoch = 0
+        self.remains.clear()
+        self.cache.pop_all()
+        self.reader = iter(self.reader)
 
     def iter_epoch(self):
         """Iterate through the dataset for one epoch.
@@ -91,13 +99,9 @@ class DataIterator(Persistable):
         than 2/3 of the specified batch size.
 
         """
+
         cache = self.cache
         remains = self.remains
-        try:
-            self.reader.finalize()
-        except Exception as e:
-            raise e
-        self.reader = iter(self.reader)
 
         end_of_epoch = False
         sort_batch = False
@@ -105,6 +109,7 @@ class DataIterator(Persistable):
             batch = Batch(self.batch_size, self.sample_size_fn)
             if cache.effective_size() < self.batch_size * 2 / 3.0:
                 if end_of_epoch:
+                    self.reader = iter(self.reader)
                     break
                 # Consume samples from cache before filling-in
                 remains += cache.pop_all()
@@ -116,6 +121,9 @@ class DataIterator(Persistable):
                     end_of_epoch = True
                 cache.sort(self.sort_desc_by)
 
+            # if self.epoch==2 and not xxx:
+            #     print(cache._samples)
+            #     xxx=True
             if remains:
                 batch.from_list(remains, self.batch_size)
                 sort_batch = True
@@ -127,18 +135,12 @@ class DataIterator(Persistable):
                 if sort_batch:
                     batch.sort(self.sort_desc_by)
                     sort_batch = False
-                yield (batch, self.collate_fn(batch.samples))
+                # yield (batch, self.collate_fn(batch.samples))
+
                 self.step_in_epoch += 1
                 self.step += 1
-        self.epoch += 1
-        self.step_in_epoch = 0
-
-    def reset(self):
-        self.step_in_epoch = 0
-        self.step = 0
-        self.epoch = 0
-        self.remains.clear()
-        self.cache.pop_all()
+                yield (batch, None)
+        raise StopIteration
 
     def while_true(self, predicate: Callable[[], bool]):
         """Iterates through the dataset by a given stopping criteria.
@@ -152,10 +154,13 @@ class DataIterator(Persistable):
                 is None, the returned `inputs` is also None.
         """
         epoch_iter = self.iter_epoch()
+
         while predicate():
             try:
                 batch = next(epoch_iter)
             except StopIteration:
+                self.epoch += 1
+                self.step_in_epoch=-1
                 epoch_iter = self.iter_epoch()
                 continue
 
@@ -166,7 +171,7 @@ class DataIterator(Persistable):
 
     @overrides
     def state_dict(self) -> Dict:
-        return get_state_dict(self, exclusions=self._exclusions)
+        return get_state_dict(self, exclusions=self._exclusions, recursive=True)
 
     @overrides
     def load_state_dict(self, state_dict: Dict) -> None:

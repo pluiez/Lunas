@@ -1,42 +1,45 @@
-from typing import List, Iterable, Dict, Callable, Any
+from typing import List, Iterable, Dict, Callable, Any, Tuple
 
 import numpy
+from overrides import overrides
+
+from lunas.interface import Persistable
+from lunas.utils import get_state_dict, load_state_dict
 
 
-class Batch(object):
+class Batch(Persistable):
     def __init__(self, size: int, size_fn: Callable[[Any], int]):
         super().__init__()
         self.size = size
         self.size_fn = size_fn
-        self._samples = []
+        self._samples: List[Tuple] = []
         self._sort_idx: numpy.ndarray = None
-        self._sample_sizes: Dict[int, int] = dict()
+        self._exclusions = ['size_fn', ]
 
     @property
     def samples(self):
-        return self._samples
+        return [sample for sample, size in self._samples]
+
+    @property
+    def sizes(self):
+        return [size for sample, size in self._samples]
 
     def pop_all(self):
-        samples = self._samples
-        self._samples = []
-        self._sample_sizes = dict()
+        samples = self.samples
+        self._samples.clear()
         return samples
 
     def pop(self, idx: int = -1):
-        sample = self._samples.pop(idx)
-        if id(sample) in self._sample_sizes:
-            del self._sample_sizes[id(sample)]
+        sample ,size= self._samples.pop(idx)
         return sample
 
     def push(self, sample):
+        size=self.size_fn(sample)
+        sample=(sample,size)
         self._samples.append(sample)
-        self._sample_sizes[id(sample)] = self.size_fn(sample)
-
-    def get_sample_sizes(self) -> Iterable:
-        return (self._sample_sizes[id(x)] for x in self._samples)
 
     def effective_size(self):
-        return sum(self.get_sample_sizes())
+        return sum(self.sizes)
 
     def from_iter(self, sample_iter: Iterable, size: int = None, raise_when_stopped: bool = False):
         """
@@ -83,7 +86,7 @@ class Batch(object):
 
     def sort(self, key_fn: Callable[[Any], int]):
         if key_fn is not None:
-            keys = numpy.array(list(map(key_fn, self._samples)))
+            keys = numpy.array(list(map(key_fn, self.samples)))
             indices = numpy.argsort(keys)[::-1]
             self._sort_idx = indices
             indices = list(indices)
@@ -97,6 +100,14 @@ class Batch(object):
         indices = list(indices)
         samples = [samples[i] for i in indices]
         return samples
+
+    @overrides
+    def state_dict(self) -> Dict:
+        return get_state_dict(self, exclusions=self._exclusions)
+
+    @overrides
+    def load_state_dict(self, state_dict: Dict) -> None:
+        load_state_dict(self, state_dict)
 
 
 class Cache(Batch, Iterable):

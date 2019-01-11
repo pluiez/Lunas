@@ -10,10 +10,12 @@ class TextReader(Reader):
         super().__init__(buffer_size, num_threads)
         self._filename = filename
         self._fd: TextIO = None
+        self._exclusions += ['_fd']
+        self._num_line=-1
 
     @overrides
     def size(self) -> int:
-        if not hasattr(self, '_num_line'):
+        if self._num_line<0:
             n = 0
             with open(self._filename) as r:
                 for _ in r:
@@ -27,8 +29,7 @@ class TextReader(Reader):
         super().reset_cursor()
 
     def _reset(self):
-        if self._fd is not None and not self._fd.closed:
-            raise RuntimeError('Please close the file before reset.')
+        self.finalize()
         self._fd = open(self._filename)
 
     @overrides

@@ -31,16 +31,17 @@ def try_get_attr(instance, attr_name):
         return None
 
 
-def get_state_dict(obj, exclusions=None):
+def get_state_dict(obj, exclusions=None,recursive=True):
     keys = vars(obj).keys()
     state_dict = {}
 
     for key in keys:
         if not exclusions or key not in exclusions:
             prop = getattr(obj, key)
-            to_state_dict = try_get_attr(prop, 'state_dict')
-            if callable(to_state_dict):
-                prop = to_state_dict()
+            if recursive:
+                to_state_dict = try_get_attr(prop, 'state_dict')
+                if callable(to_state_dict):
+                    prop = to_state_dict()
             state_dict[key] = prop
 
     return state_dict

@@ -1,5 +1,5 @@
 import abc
-from typing import List, Iterable, Dict, Callable, Tuple, Any
+from typing import List, Iterable, Dict, Callable, Any
 
 import numpy
 from overrides import overrides
@@ -197,7 +197,7 @@ class Reader(BaseReader):
         # Indicates position in the dataset.
         self._cursor: int = -1
 
-        self._exclusions += ['_fns', 'buffer']
+        self._exclusions += ['_fns', '_buffer']
 
     @overrides
     def cursor(self) -> int:
@@ -256,7 +256,10 @@ class Reader(BaseReader):
         return sample
 
     def _parallel_apply(self, samples: List[Any]) -> List[Any]:
-        return parallel_map(self._apply, samples, self._num_threads)
+        if self._fns:
+            return parallel_map(self._apply, samples, self._num_threads)
+        else:
+            return samples
 
     @overrides
     def _next(self) -> Any:
@@ -277,6 +280,7 @@ class Reader(BaseReader):
     def load_state_dict(self, state_dict: Dict) -> None:
         load_state_dict(self, state_dict)
         cursor = self._cursor
+        self.reset_cursor()
         # Fast-skip these samples
         self._fast_skip = True
         while self._cursor < cursor:
@@ -298,7 +302,7 @@ class Reader(BaseReader):
         sample = self._next()
         # Don't return filtered samples.
         if sample is None:
-            return next(self)
+            return self.__next__()
         return sample
 
     def __iter__(self) -> BaseReader:
@@ -312,19 +316,18 @@ class ShuffleReader(Reader):
     def __init__(self, reader: BaseReader, buffer_size: int = 10000, num_threads: int = 1):
         super().__init__(buffer_size, num_threads)
         self.reader = reader
-        self._random_state: Tuple = None
+        self._random_state = numpy.random.get_state()
 
     @overrides
     def size(self) -> int:
         return len(self.reader)
 
     def next(self) -> Any:
-        rv = next(self.reader)
+        rv = self.reader.next()
         # print(rv)
         return rv
 
     def _shuffle_buffer(self):
-        self._random_state = numpy.random.get_state()
         numpy.random.shuffle(self._buffer)
 
     @overrides
@@ -342,6 +345,12 @@ class ShuffleReader(Reader):
         self.reader = iter(self.reader)
         return super().__iter__()
 
+    @overrides
+    def load_state_dict(self, state_dict: Dict) -> None:
+        numpy.random.set_state(state_dict['_random_state'])
+        del state_dict['_random_state']
+        super().load_state_dict(state_dict)
+
 
 class ZipReader(Reader):
     def __init__(self, *readers: List[BaseReader], buffer_size: int = 10000, num_threads: int = 1):
@@ -349,7 +358,7 @@ class ZipReader(Reader):
         self.readers = readers
         lens = list(map(len, readers))
         if len(set(lens)) != 1:
-            raise RuntimeError(f'Sizes of datasets must match. Got {lens}')
+            raise RuntimeError(f'Sizes of datasets must match. Got {lens}.')
         self._exclusions += ['readers']
 
     @overrides
@@ -358,7 +367,8 @@ class ZipReader(Reader):
 
     @overrides
     def next(self):
-        sample = tuple(next(r) for r in self.readers)
+        sample = tuple([r.next() for r in self.readers])
+        # sample = tuple(r.next() for r in self.readers)
         if any(s is None for s in sample):
             sample = None
 
@@ -402,6 +412,10 @@ class RangeReader(Reader):
         self.stop = stop
         self.step = step
 
+        self._range = None
+
+        self._exclusions += ['_range']
+
     @overrides
     def size(self) -> int:
         import math
@@ -409,7 +423,7 @@ class RangeReader(Reader):
 
     def _reset(self):
         start, stop, step = self.start, self.stop, self.step
-        self._range = iter(list(range(start, stop, step)))
+        self._range = iter(range(start, stop, step))
 
     @overrides
     def reset_cursor(self):
