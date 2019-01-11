@@ -92,6 +92,11 @@ class DataIterator(Persistable):
         self.cache.pop_all()
         self.reader = iter(self.reader)
 
+    def reset_epoch(self):
+        self.step_in_epoch=-1
+        self.remains.clear()
+        self.cache.pop_all()
+
     def iter_epoch(self):
         """Iterate through the dataset for one epoch.
 
@@ -99,7 +104,7 @@ class DataIterator(Persistable):
         than 2/3 of the specified batch size.
 
         """
-
+        # self.reset_epoch()
         cache = self.cache
         remains = self.remains
 
@@ -137,6 +142,8 @@ class DataIterator(Persistable):
                 self.step += 1
                 yield (batch, self.collate_fn(batch.samples))
 
+        self.epoch+=1
+        self.step_in_epoch=-1
         raise StopIteration
 
     def while_true(self, predicate: Callable[[], bool]):
@@ -156,8 +163,8 @@ class DataIterator(Persistable):
             try:
                 batch = next(epoch_iter)
             except StopIteration:
-                self.epoch += 1
-                self.step_in_epoch = -1
+                # self.epoch += 1
+                # self.step_in_epoch = -1
                 epoch_iter = self.iter_epoch()
                 continue
 
