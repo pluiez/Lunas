@@ -121,9 +121,6 @@ class DataIterator(Persistable):
                     end_of_epoch = True
                 cache.sort(self.sort_desc_by)
 
-            # if self.epoch==2 and not xxx:
-            #     print(cache._samples)
-            #     xxx=True
             if remains:
                 batch.from_list(remains, self.batch_size)
                 sort_batch = True
@@ -135,11 +132,11 @@ class DataIterator(Persistable):
                 if sort_batch:
                     batch.sort(self.sort_desc_by)
                     sort_batch = False
-                # yield (batch, self.collate_fn(batch.samples))
 
                 self.step_in_epoch += 1
                 self.step += 1
-                yield (batch, None)
+                yield (batch, self.collate_fn(batch.samples))
+                
         raise StopIteration
 
     def while_true(self, predicate: Callable[[], bool]):
@@ -160,7 +157,7 @@ class DataIterator(Persistable):
                 batch = next(epoch_iter)
             except StopIteration:
                 self.epoch += 1
-                self.step_in_epoch=-1
+                self.step_in_epoch = -1
                 epoch_iter = self.iter_epoch()
                 continue
 

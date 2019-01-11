@@ -126,9 +126,9 @@ However, you can still extend this library to suit your needs at any time to han
 
    ```python
    import pickle
-   pickle.dump(it.state_dict(), open('state.pkl'))
+   pickle.dump(it.state_dict(), open('state.pkl', 'wb'))
    # ...
-   state = pickle.load(open('state.pkl'))
+   state = pickle.load(open('state.pkl', 'rb'))
    it.load_state_dict(state)
    ```
 
