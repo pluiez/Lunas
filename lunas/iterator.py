@@ -136,7 +136,7 @@ class DataIterator(Persistable):
                 self.step_in_epoch += 1
                 self.step += 1
                 yield (batch, self.collate_fn(batch.samples))
-                
+
         raise StopIteration
 
     def while_true(self, predicate: Callable[[], bool]):
