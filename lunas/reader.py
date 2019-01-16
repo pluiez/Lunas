@@ -263,7 +263,6 @@ class Reader(BaseReader):
 
     @overrides
     def _next(self) -> Any:
-        self.cursor()
 
         if self.get_effective_buffer_size() == 0:
             self._fill_buffer()
@@ -284,6 +283,7 @@ class Reader(BaseReader):
         # Fast-skip these samples
         self._fast_skip = True
         while self._cursor < cursor:
+            self.cursor()
             self._next()
         self._buffer = self._parallel_apply(self._buffer)
         self._fast_skip = False
@@ -299,6 +299,7 @@ class Reader(BaseReader):
             self.finalize()
             raise StopIteration
 
+        self.cursor()
         sample = self._next()
         # Don't return filtered samples.
         if sample is None:
@@ -323,8 +324,7 @@ class ShuffleReader(Reader):
         return len(self.reader)
 
     def next(self) -> Any:
-        rv = self.reader.next()
-        # print(rv)
+        rv = self.reader._next()
         return rv
 
     def _shuffle_buffer(self):
@@ -342,6 +342,7 @@ class ShuffleReader(Reader):
 
     @overrides
     def __iter__(self) -> Iterable:
+        self._random_state = numpy.random.get_state()
         self.reader = iter(self.reader)
         return super().__iter__()
 
@@ -353,12 +354,14 @@ class ShuffleReader(Reader):
 
 
 class ZipReader(Reader):
-    def __init__(self, *readers: List[BaseReader], buffer_size: int = 10000, num_threads: int = 1):
+    def __init__(self, *readers: List[BaseReader], buffer_size: int = 10000, num_threads: int = 1,
+                 check_size_consistency: bool = True):
         super().__init__(buffer_size, num_threads)
         self.readers = readers
-        lens = list(map(len, readers))
-        if len(set(lens)) != 1:
-            raise RuntimeError(f'Sizes of datasets must match. Got {lens}.')
+        if check_size_consistency:
+            sizes = list(map(len, readers))
+            if len(set(sizes)) != 1:
+                raise RuntimeError(f'Sizes of datasets must match. Got {sizes}.')
         self._exclusions += ['readers']
 
     @overrides
@@ -367,7 +370,7 @@ class ZipReader(Reader):
 
     @overrides
     def next(self):
-        sample = tuple([r.next() for r in self.readers])
+        sample = tuple([r._next() for r in self.readers])
         # sample = tuple(r.next() for r in self.readers)
         if any(s is None for s in sample):
             sample = None

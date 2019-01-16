@@ -25,7 +25,7 @@ class DataIterator(Persistable):
             cache_size: A `int` scalar. Prefetch `cache_size` samples from the `reader` in `self.cache`.
             sample_size_fn: (Optional.) A callable function that calculates size for each sample.
                 The size of each sample will then be summed up as the size of the batch. If not
-                specified, default to 1 for each sample, which is actually `lambda sample: 1`.
+                specified, default to 1 for each sample, which is equivalent to `lambda sample: 1`.
             collate_fn: (Optional.) A callable function that converts a list of samples to model inputs.
             sort_desc_by: (Optional.) A callable function that returns a sorting key for each sample. If not
                 specified, leave the batch as it is.
@@ -38,8 +38,6 @@ class DataIterator(Persistable):
         self.cache_size = cache_size
         self.sort_desc_by = sort_desc_by
 
-        if sample_size_fn is None:
-            sample_size_fn = lambda sample: 1
         if collate_fn is None:
             collate_fn = lambda samples: None
 
@@ -93,7 +91,7 @@ class DataIterator(Persistable):
         self.reader = iter(self.reader)
 
     def reset_epoch(self):
-        self.step_in_epoch=-1
+        self.step_in_epoch = -1
         self.remains.clear()
         self.cache.pop_all()
 
@@ -126,24 +124,35 @@ class DataIterator(Persistable):
                     end_of_epoch = True
                 cache.sort(self.sort_desc_by)
 
-            if remains:
-                batch.from_list(remains, self.batch_size)
-                sort_batch = True
-            batch.from_iter(cache, self.batch_size)
-
-            if batch.effective_size() < self.batch_size:
-                remains += batch.pop_all()
-            else:
-                if sort_batch:
-                    batch.sort(self.sort_desc_by)
-                    sort_batch = False
-
+            if self.batch_size == self.cache_size:
+                # Simply return the cache such that the samples
+                # can be desorted later.
+                batch = cache
+                cache = Cache(self.cache_size, self.sample_size_fn)
+                self.cache = cache
                 self.step_in_epoch += 1
                 self.step += 1
                 yield (batch, self.collate_fn(batch.samples))
 
-        self.epoch+=1
-        self.step_in_epoch=-1
+            else:
+                if remains:
+                    batch.from_list(remains, self.batch_size)
+                    sort_batch = True
+                batch.from_iter(cache, self.batch_size)
+
+                if batch.effective_size() < self.batch_size:
+                    remains += batch.pop_all()
+                else:
+                    if sort_batch:
+                        batch.sort(self.sort_desc_by)
+                        sort_batch = False
+
+                    self.step_in_epoch += 1
+                    self.step += 1
+                    yield (batch, self.collate_fn(batch.samples))
+
+        self.epoch += 1
+        self.step_in_epoch = -1
         raise StopIteration
 
     def while_true(self, predicate: Callable[[], bool]):

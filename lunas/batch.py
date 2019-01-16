@@ -8,7 +8,7 @@ from lunas.utils import get_state_dict, load_state_dict
 
 
 class Batch(Persistable):
-    def __init__(self, size: int, size_fn: Callable[[Any], int]):
+    def __init__(self, size: int, size_fn: Callable[[Any], int] = None):
         super().__init__()
         self.size = size
         self.size_fn = size_fn
@@ -30,12 +30,14 @@ class Batch(Persistable):
         return samples
 
     def pop(self, idx: int = -1):
-        sample ,size= self._samples.pop(idx)
+        sample, size = self._samples.pop(idx)
         return sample
 
     def push(self, sample):
-        size=self.size_fn(sample)
-        sample=(sample,size)
+        size = 1
+        if self.size_fn is not None:
+            size = self.size_fn(sample)
+        sample = (sample, size)
         self._samples.append(sample)
 
     def effective_size(self):
@@ -111,7 +113,7 @@ class Batch(Persistable):
 
 
 class Cache(Batch, Iterable):
-    def __init__(self, size: int, size_fn: Callable[[Any], int]):
+    def __init__(self, size: int, size_fn: Callable[[Any], int] = None):
         super().__init__(size, size_fn)
 
     def __next__(self):
