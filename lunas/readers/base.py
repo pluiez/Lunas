@@ -1,14 +1,14 @@
 import abc
-from typing import List, Iterable, Dict, Callable, Any
+import itertools
+from typing import List, Dict, Callable, Any
 
-import numpy
 from overrides import overrides
 
-from lunas.interface import Persistable
+from lunas.persistable import Persistable
 from lunas.utils import parallel_map, get_state_dict, load_state_dict
 
 
-class BaseReader(Iterable, Persistable):
+class BaseReader(Persistable):
     """A abstract class representing a dataset reader.
 
     A reader includes pipeline to process each sample and iterate through the dataset.
@@ -33,6 +33,7 @@ class BaseReader(Iterable, Persistable):
         """Reset cursor to enable re-iterating over the dataset.
 
         """
+        raise NotImplementedError
 
     def where(self, predicate: Callable[[Any], bool]):
         """Filters a sample by predicate.
@@ -81,9 +82,9 @@ class BaseReader(Iterable, Persistable):
 
         For example, the following usage of `self.where()` filters would cause size inconsistency.
         ```python
-        ds1 = RangeReader(10).where(lambda x: x<5)
-        ds2 = RangeReader(10).where(lambda x: x<6)
-        ds = ZipReader(ds1, ds2)
+        ds1 = Range(10).where(lambda x: x<5)
+        ds2 = Range(10).where(lambda x: x<6)
+        ds = Zip(ds1, ds2)
         iterator = DataIterator(ds)
         # ...
         for batch in iterator():
@@ -101,14 +102,14 @@ class BaseReader(Iterable, Persistable):
 
     def next(self) -> Any:
         """Get an original sample from the dataset by index. DO NOT invoke this method from
-        outside, use `next(dataset)` instead.
+        outside, use `next(dataset)` instead. This method should raise StopIteration at the end of dataset.
 
         Returns:
             A sample of any type.
         """
         raise NotImplementedError
 
-    def _next(self) -> Any:
+    def buffered_next(self) -> Any:
         """Wrapper method to get next sample.
 
         Wraps `self.next()`, apply transformations and predicates, and maintains
@@ -162,19 +163,6 @@ class BaseReader(Iterable, Persistable):
         self.reset_cursor()
         return self
 
-    def shuffle(self, buffer_size: int = 10000, num_threads: int = 1):
-        """Returns a shufflable counterpart of this dataset.
-
-        Args:
-            buffer_size: A `int` scalar. Represents the number of samples to shuffle each time.
-            num_threads:
-
-        Returns:
-            A `ShuffleReader`.
-
-        """
-        raise NotImplementedError
-
     def load_state_dict(self, state_dict: Dict) -> None:
         raise NotImplementedError
 
@@ -186,13 +174,14 @@ class Reader(BaseReader):
     """Implements the functions defined in `BaseReader`.
 
     """
+    __metaclass__ = abc.ABCMeta
 
     def __init__(self, buffer_size: int = 10000, num_threads: int = 1):
         super().__init__()
         self._buffer_size = buffer_size
         self._num_threads = num_threads
-        self._buffer: List[Any] = []
-        self._fns = []
+        self._buffer: List = []
+        self._fns: List = []
         self._fast_skip: bool = False
         # Indicates position in the dataset.
         self._cursor: int = -1
@@ -208,20 +197,19 @@ class Reader(BaseReader):
     def reset_cursor(self):
         self._cursor: int = -1
 
-    def check_buffer_size(self) -> None:
-        """Evaluates the buffer size lazily to prevent ``self.size()`` function from invoking before
-        sub-class is properly configured.
-
-        """
-        buffer_size = self._buffer_size
-        buffer_size = buffer_size if buffer_size > 0 else len(self)
-        self._buffer_size = min(buffer_size, len(self))
-
     def get_effective_buffer_size(self) -> int:
         return len(self._buffer)
 
+    def process_buffer(self, buffer=None, inplace=True):
+        buffer = self._buffer if buffer is None else buffer
+        buffer = self._parallel_apply(buffer)
+        # buffer = list(filter(None, buffer))
+
+        if inplace:
+            self._buffer = buffer
+        return buffer
+
     def _fill_buffer(self) -> int:
-        self.check_buffer_size()
         buffer = self._buffer
         while self.get_effective_buffer_size() < self._buffer_size:
             try:
@@ -230,7 +218,7 @@ class Reader(BaseReader):
                 break
         size = len(buffer)
         if not self._fast_skip and size > 0:
-            self._buffer = self._parallel_apply(self._buffer)
+            self.process_buffer()
         return size
 
     @overrides
@@ -245,6 +233,9 @@ class Reader(BaseReader):
 
     @overrides
     def _apply(self, sample: Any) -> Any:
+        if sample is None:
+            return sample
+
         for fn in self._fns:
             new_sample = fn(sample)
             # Stops when predicate is evaluated to False.
@@ -262,8 +253,7 @@ class Reader(BaseReader):
             return samples
 
     @overrides
-    def _next(self) -> Any:
-
+    def buffered_next(self) -> Any:
         if self.get_effective_buffer_size() == 0:
             self._fill_buffer()
         try:
@@ -277,16 +267,21 @@ class Reader(BaseReader):
 
     @overrides
     def load_state_dict(self, state_dict: Dict) -> None:
+        self._buffer.clear()
         load_state_dict(self, state_dict)
+
         cursor = self._cursor
         self.reset_cursor()
         # Fast-skip these samples
+        is_fast_skip = self._fast_skip
         self._fast_skip = True
+
         while self._cursor < cursor:
             self.cursor()
-            self._next()
-        self._buffer = self._parallel_apply(self._buffer)
-        self._fast_skip = False
+            self.buffered_next()
+        self._fast_skip = is_fast_skip
+        if not is_fast_skip:
+            self.process_buffer()
 
     @overrides
     def finalize(self):
@@ -294,14 +289,13 @@ class Reader(BaseReader):
 
     @overrides
     def __next__(self) -> Any:
-        # Check whether reaches the end of the dataset.
-        if self._cursor + 1 >= self.size():
+        try:
+            sample = self.buffered_next()
+            self.cursor()
+        except StopIteration as e:
             self.finalize()
-            raise StopIteration
+            raise e
 
-        self.cursor()
-        sample = self._next()
-        # Don't return filtered samples.
         if sample is None:
             return self.__next__()
         return sample
@@ -309,130 +303,64 @@ class Reader(BaseReader):
     def __iter__(self) -> BaseReader:
         return super().__iter__()
 
-    def shuffle(self, buffer_size: int = 10000, num_threads: int = 1) -> BaseReader:
-        return ShuffleReader(self, buffer_size, num_threads)
 
-
-class ShuffleReader(Reader):
-    def __init__(self, reader: BaseReader, buffer_size: int = 10000, num_threads: int = 1):
+class NestedReader(Reader):
+    def __init__(self, reader, buffer_size: int = 10000, num_threads: int = 1):
         super().__init__(buffer_size, num_threads)
+        multi_reader = isinstance(reader, (list, tuple))
+        if not multi_reader:
+            reader = [reader]
+        for r in reader:
+            r._fast_skip = True
         self.reader = reader
-        self._random_state = numpy.random.get_state()
+        self._multi_reader = multi_reader
 
     @overrides
     def size(self) -> int:
-        return len(self.reader)
+        return len(self.reader[0])
 
+    @overrides
     def next(self) -> Any:
-        rv = self.reader._next()
-        return rv
-
-    def _shuffle_buffer(self):
-        numpy.random.shuffle(self._buffer)
-
-    @overrides
-    def _fill_buffer(self):
-        rv = super()._fill_buffer()
-        self._shuffle_buffer()
-        return rv
+        sample = tuple([r.buffered_next() for r in self.reader])
+        return sample if self._multi_reader else sample[0]
 
     def finalize(self):
-        self.reader.finalize()
-        super().finalize()
-
-    @overrides
-    def __iter__(self) -> Iterable:
-        self._random_state = numpy.random.get_state()
-        self.reader = iter(self.reader)
-        return super().__iter__()
-
-    @overrides
-    def load_state_dict(self, state_dict: Dict) -> None:
-        numpy.random.set_state(state_dict['_random_state'])
-        del state_dict['_random_state']
-        super().load_state_dict(state_dict)
-
-
-class ZipReader(Reader):
-    def __init__(self, *readers: List[BaseReader], buffer_size: int = 10000, num_threads: int = 1,
-                 check_size_consistency: bool = True):
-        super().__init__(buffer_size, num_threads)
-        self.readers = readers
-        if check_size_consistency:
-            sizes = list(map(len, readers))
-            if len(set(sizes)) != 1:
-                raise RuntimeError(f'Sizes of datasets must match. Got {sizes}.')
-        self._exclusions += ['readers']
-
-    @overrides
-    def size(self) -> int:
-        return len(self.readers[0])
-
-    @overrides
-    def next(self):
-        sample = tuple([r._next() for r in self.readers])
-        # sample = tuple(r.next() for r in self.readers)
-        if any(s is None for s in sample):
-            sample = None
-
-        return sample
-
-    def finalize(self):
-        for reader in self.readers:
+        for reader in self.reader:
             reader.finalize()
         super().finalize()
 
     @overrides
-    def __iter__(self) -> Iterable:
-        self.readers = list(map(iter, self.readers))
+    def process_buffer(self, buffer=None, inplace=True):
+        buffer = self._buffer if buffer is None else buffer
+        reader = self.reader
+        if self._multi_reader:
+            new_buffer = list(zip(
+                *[r.process_buffer(buf, inplace=False) for r, buf in
+                  zip(reader, itertools.zip_longest(*buffer))]))
+            new_buffer = list(map(
+                lambda sample: sample if all(s is not None for s in sample) else None,
+                new_buffer
+            ))
+        else:
+            new_buffer = reader[0].process_buffer(buffer, inplace=False)
+
+        return super().process_buffer(new_buffer, inplace)
+
+    @overrides
+    def __iter__(self):
+        self.reader = list(map(iter, self.reader))
         return super().__iter__()
 
     @overrides
     def state_dict(self) -> Dict:
         state = super().state_dict()
-        state['readers'] = [r.state_dict() for r in self.readers]
+        state['reader'] = [r.state_dict() for r in self.reader]
         return state
 
     @overrides
     def load_state_dict(self, state_dict: Dict) -> None:
-        for r, state in zip(self.readers, state_dict['readers']):
+        for r, state in zip(self.reader, state_dict['reader']):
             r.load_state_dict(state)
-        del state_dict['readers']
+        del state_dict['reader']
 
         super().load_state_dict(state_dict)
-
-
-class RangeReader(Reader):
-    def __init__(self, start: int, stop: int = None, step: int = None, buffer_size: int = 10000, num_threads: int = 1):
-        super().__init__(buffer_size, num_threads)
-        if stop is None:
-            stop = start
-            start = 0
-        if step is None:
-            step = 1
-
-        self.start = start
-        self.stop = stop
-        self.step = step
-
-        self._range = None
-
-        self._exclusions += ['_range']
-
-    @overrides
-    def size(self) -> int:
-        import math
-        return int(math.ceil((self.stop - self.start) / self.step))
-
-    def _reset(self):
-        start, stop, step = self.start, self.stop, self.step
-        self._range = iter(range(start, stop, step))
-
-    @overrides
-    def reset_cursor(self):
-        super().reset_cursor()
-        self._reset()
-
-    @overrides
-    def next(self) -> Any:
-        return next(self._range)

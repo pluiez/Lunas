@@ -1,6 +1,6 @@
 # Lunas
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.2.0-limegreen.svg)](https://github.com/pluiez/lunas)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.2.1-limegreen.svg)](https://github.com/pluiez/lunas)
 
 **Lunas** is a Python 3-based library that provides a set of simple interfaces for data processing pipelines and an iterator for looping through data.
 
@@ -53,45 +53,48 @@ However, you can still extend this library to suit your needs at any time to han
 1. Create a dataset reader and iterate through it.
 
    ```python
-   from lunas.reader import RangeReader
+   from lunas.readers import Range
 
-   ds = RangeReader(10)
+   ds = Range(10)
+   for sample in ds:
+       print(sample)
    for sample in ds:
        print(sample)
    ```
 
    - We created a dataset similar to range(10) and iterate through it for one epoch.
+   As you see, we can iterate through this dataset several times.
 
 2. Build a data processing pipeline.
 
    ```python
-   ds = RangeReader(10).select(lambda x: x + 1).select(lambda x: x * 2).where(lambda x: x % 2 == 0)
+   ds = Range(10).select(lambda x: x + 1).select(lambda x: x * 2).where(lambda x: x % 2 == 0)
    ```
 
    - we call `Reader.select(fn)` to define a processing procedure for the dataset.
    - `select()` returns the dataset itself to enable chaining invocations. You can apply any transformations to the dataset and return a sample of any type, say `Dict`, `List` and custom `Sample`.
    - `where()` accepts a predicate and returns a `bool` value to filter input sample, if True, the sample is preserved, otherwise discarded.
-   - It should be noted that the processing will not be executed immediately, but will be performed when iterating through `ds`.
+   - It should be noted that the processing is not executed immediately, but will be performed when iterating through `ds`.
 
 3. Deal with multiple input sources.
 
    ```python
-   from lunas.reader import RangeReader, ZipReader, ShuffleReader
+   from lunas.readers import Range, Zip, Shuffle
 
-   ds1 = RangeReader(10)
-   ds2 = RangeReader(10)
-   ds = ZipReader(ds1, ds2).select(lambda x: x[0] + x[1])
-   ds = ds.shuffle()
+   ds1 = Range(10)
+   ds2 = Range(10)
+   ds = Zip(ds1, ds2).select(lambda x: x[0] + x[1])
+   ds = Shuffle(ds)
    ```
 
-   - In the above code, we created two datasets and *zip* them as a `ZipReader`. A `ZipReader` returns a tuple from its internal `readers`.
-   - `ds.shuffle()` returns a `ShuffleReader` of the dataset.
+   - In the above code, we created two datasets and *zip* them as a `Zip` reader. A `Zip` reader returns a tuple from its internal `readers`.
+   - `Shuffle` performs randomized shuffling on the dataset.
 
 4. Practical use case in Machine Translation scenario.
 
    ```python
-   from lunas.readers.text import TextReader
-   from lunas.iterator import DataIterator
+   from lunas.readers import TextLine
+   from lunas.iterator import Iterator
 
    # Tokenize the input into a list of tokens.
    tokenize = lambda line: line.split()
@@ -100,10 +103,10 @@ However, you can still extend this library to suit your needs at any time to han
    # Map word to id.
    word2id = lambda src_tgt: ...
 
-   source = TextReader('train.fr').select(tokenize)
-   target = TextReader('train.en').select(tokenize)
-   ds = ZipReader(source, target).where(limit)
-   ds = ds.shuffle().select(word2id)
+   source = TextLine('train.fr').select(tokenize)
+   target = TextLine('train.en').select(tokenize)
+   ds = Zip(source, target).where(limit)
+   ds = Shuffle().select(word2id)
 
    # Take maximum length of the sentence pair as sample_size
    sample_size = lambda x: max(map(len), x)
@@ -112,7 +115,7 @@ However, you can still extend this library to suit your needs at any time to han
    # Sort samples in batch by source text length
    sort_key = lambda x: len(x[0])
 
-   it = DataIterator(ds, batch_size=4096, cache_size=40960, sample_size_fn=lambda x, collate_fn=collate_fn, sort_desc_by=sort_key)
+   it = Iterator(ds, batch_size=4096, cache_size=40960, sample_size_fn=lambda x, collate_fn=collate_fn, sort_desc_by=sort_key)
 
    # Iterate 100 epoch and 1000000 steps at most.
    for batch in it.while_true(lambda: it.epoch < 100 and it.step < 1e6):
@@ -136,7 +139,7 @@ However, you can still extend this library to suit your needs at any time to han
 
 3. Extend the reader.
 
-   - You can refer to the implementation of `TextReader` to customize your own data reader.
+   - You can refer to the implementation of `Text` reader to customize your own data reader.
 
 ## Conclusions
 

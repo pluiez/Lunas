@@ -3,7 +3,7 @@ from typing import List, Iterable, Dict, Callable, Any, Tuple
 import numpy
 from overrides import overrides
 
-from lunas.interface import Persistable
+from lunas.persistable import Persistable
 from lunas.utils import get_state_dict, load_state_dict
 
 
@@ -14,7 +14,7 @@ class Batch(Persistable):
         self.size_fn = size_fn
         self._samples: List[Tuple] = []
         self._sort_idx: numpy.ndarray = None
-        self._exclusions = ['size_fn', ]
+        self._exclusions = ['size_fn']
 
     @property
     def samples(self):
@@ -43,7 +43,7 @@ class Batch(Persistable):
     def effective_size(self):
         return sum(self.sizes)
 
-    def from_iter(self, sample_iter: Iterable, size: int = None, raise_when_stopped: bool = False):
+    def from_iter(self, sample_iter, size: int = None, raise_when_stopped: bool = False):
         """
         Fills batch from an iterable object. Enables dynamic batch size if size is not None.
         Args:
@@ -94,10 +94,12 @@ class Batch(Persistable):
             indices = list(indices)
             self._samples = [self._samples[i] for i in indices]
 
-    def desort(self, samples: List[Any]):
+    def revert(self, samples: List[Any]):
         if len(samples) != len(self._sort_idx):
-            raise RuntimeError(f'Number of samples must match the number of indices. '
-                               f'{len(samples)} != {len(self._sort_idx)}')
+            raise RuntimeError(
+                f'Number of samples ({len(samples)}) must match '
+                f'the number of indices ({len(self._sort_idx)}).'
+            )
         indices = numpy.argsort(self._sort_idx)
         indices = list(indices)
         samples = [samples[i] for i in indices]

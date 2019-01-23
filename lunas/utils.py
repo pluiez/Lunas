@@ -1,5 +1,5 @@
 from multiprocessing.pool import ThreadPool
-from typing import Callable, List, Any, Iterable
+from typing import Callable, Any, Iterable
 
 
 def parallel_map(fn: Callable[[Any], Any], inputs: Iterable[Any], num_thread: int):
@@ -31,7 +31,7 @@ def try_get_attr(instance, attr_name):
         return None
 
 
-def get_state_dict(obj, exclusions=None,recursive=True):
+def get_state_dict(obj, exclusions=None, recursive=True):
     keys = vars(obj).keys()
     state_dict = {}
 
@@ -50,8 +50,8 @@ def get_state_dict(obj, exclusions=None,recursive=True):
 def load_state_dict(obj, state_dict):
     for key, val in state_dict.items():
         prop = getattr(obj, key)
-        load_state_dict = try_get_attr(prop, 'load_state_dict')
-        if callable(load_state_dict):
-            load_state_dict(val)
+        load_state_dict_ = try_get_attr(prop, 'load_state_dict')
+        if callable(load_state_dict_):
+            load_state_dict_(val)
         else:
             setattr(obj, key, val)

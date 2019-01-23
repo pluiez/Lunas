@@ -2,20 +2,20 @@ from typing import TextIO, Any
 
 from overrides import overrides
 
-from lunas.reader import Reader
+from lunas.readers.base import Reader
 
 
-class TextReader(Reader):
+class TextLine(Reader):
     def __init__(self, filename: str, buffer_size: int = 10000, num_threads: int = 1):
         super().__init__(buffer_size, num_threads)
         self._filename = filename
         self._fd: TextIO = None
         self._exclusions += ['_fd']
-        self._num_line=-1
+        self._num_line = -1
 
     @overrides
     def size(self) -> int:
-        if self._num_line<0:
+        if self._num_line < 0:
             n = 0
             with open(self._filename) as r:
                 for _ in r:
@@ -34,10 +34,13 @@ class TextReader(Reader):
 
     @overrides
     def finalize(self):
-        if self._fd is not None:
+        if self._fd is not None and not self._fd.closed:
             self._fd.close()
         super().finalize()
 
     @overrides
     def next(self) -> Any:
-        return self._fd.readline()
+        line = self._fd.readline()
+        if line == '':
+            raise StopIteration
+        return line

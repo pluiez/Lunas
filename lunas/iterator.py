@@ -3,12 +3,16 @@ from typing import List, Dict, Callable, Any
 from overrides import overrides
 
 from lunas.batch import Batch, Cache
-from lunas.interface import Persistable
-from lunas.reader import Reader
+from lunas.persistable import Persistable
+from lunas.readers import Reader
 from lunas.utils import get_state_dict, load_state_dict
 
 
-class DataIterator(Persistable):
+def no_op(_):
+    return None
+
+
+class Iterator(Persistable):
     """An iterator that iterates through a `Reader`.
 
     This class performs multi-pass iterations over the dataset and maintains
@@ -39,7 +43,7 @@ class DataIterator(Persistable):
         self.sort_desc_by = sort_desc_by
 
         if collate_fn is None:
-            collate_fn = lambda samples: None
+            collate_fn = no_op
 
         self.sample_size_fn = sample_size_fn
         self.collate_fn = collate_fn
@@ -79,15 +83,17 @@ class DataIterator(Persistable):
         """
         cache_size = cache_size or self.cache_size
         if batch_size > cache_size:
-            raise RuntimeError(f'Batch size should be less than cache size. '
-                               f'Got batch_size = {batch_size} and cache_size = {cache_size}.')
+            raise RuntimeError(
+                f'Batch size ({batch_size}) should be less than cache size ({cache_size}). '
+                f'Please lower the batch size or increase the cache size.'
+            )
 
     def reset(self):
         self.step_in_epoch = -1
         self.step = -1
         self.epoch = 0
         self.remains.clear()
-        self.cache.pop_all()
+        self.cache.pop_all()  # discard
         self.reader = iter(self.reader)
 
     def reset_epoch(self):
@@ -112,6 +118,14 @@ class DataIterator(Persistable):
             batch = Batch(self.batch_size, self.sample_size_fn)
             if cache.effective_size() < self.batch_size * 2 / 3.0:
                 if end_of_epoch:
+                    # Raise error when the whole dataset cannot form a batch
+                    if self.step == -1:
+                        raise RuntimeError(
+                            f'Size of the dataset ({len(remains)}) '
+                            f'is smaller than batch size ({self.batch_size}). '
+                            f'Please lower the batch size or '
+                            f'check whether the dataset is too small.'
+                        )
                     self.reader = iter(self.reader)
                     break
                 # Consume samples from cache before filling-in
@@ -126,7 +140,7 @@ class DataIterator(Persistable):
 
             if self.batch_size == self.cache_size:
                 # Simply return the cache such that the samples
-                # can be desorted later.
+                # can be reverted to the original order later.
                 batch = cache
                 cache = Cache(self.cache_size, self.sample_size_fn)
                 self.cache = cache
