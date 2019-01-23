@@ -62,7 +62,7 @@ However, you can still extend this library to suit your needs at any time to han
        print(sample)
    ```
 
-   - We created a dataset similar to range(10) and iterate through it for one epoch.
+   - We create a dataset similar to range(10) and iterate through it for one epoch.
    As you see, we can iterate through this dataset several times.
 
 2. Build a data processing pipeline.
@@ -87,7 +87,7 @@ However, you can still extend this library to suit your needs at any time to han
    ds = Shuffle(ds)
    ```
 
-   - In the above code, we created two datasets and *zip* them as a `Zip` reader. A `Zip` reader returns a tuple from its internal `readers`.
+   - In the above code, we create two datasets and *zip* them as a `Zip` reader. A `Zip` reader returns a tuple from its internal `readers`.
    - `Shuffle` performs randomized shuffling on the dataset.
 
 4. Practical use case in Machine Translation scenario.
