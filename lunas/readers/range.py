@@ -14,9 +14,9 @@ class Range(Reader):
         if step is None:
             step = 1
 
-        self.start = start
-        self.stop = stop
-        self.step = step
+        self._start = start
+        self._stop = stop
+        self._step = step
 
         self._range = None
 
@@ -25,10 +25,10 @@ class Range(Reader):
     @overrides
     def size(self) -> int:
         import math
-        return int(math.ceil((self.stop - self.start) / self.step))
+        return int(math.ceil((self._stop - self._start) / self._step))
 
     def _reset(self):
-        start, stop, step = self.start, self.stop, self.step
+        start, stop, step = self._start, self._stop, self._step
         self._range = iter(range(start, stop, step))
 
     @overrides

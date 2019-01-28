@@ -8,10 +8,6 @@ from lunas.readers import Reader
 from lunas.utils import get_state_dict, load_state_dict
 
 
-def no_op(_):
-    return None
-
-
 class Iterator(Persistable):
     """An iterator that iterates through a `Reader`.
 
@@ -20,7 +16,9 @@ class Iterator(Persistable):
     """
 
     def __init__(self, reader: Reader, batch_size, cache_size: int = 1000, sample_size_fn: Callable[[Any], int] = None,
-                 collate_fn: Callable[[List[Any]], Any] = None, sort_desc_by: Callable[[Any], int] = None):
+                 collate_fn: Callable[[List[Any]], Any] = None, sort_cache_by: Callable[[Any], int] = None,
+                 sort_batch_by: Callable[[Any], int] = None,
+                 drop_tails=True):
         """Initialize the iterator.
 
         Args:
@@ -31,35 +29,53 @@ class Iterator(Persistable):
                 The size of each sample will then be summed up as the size of the batch. If not
                 specified, default to 1 for each sample, which is equivalent to `lambda sample: 1`.
             collate_fn: (Optional.) A callable function that converts a list of samples to model inputs.
-            sort_desc_by: (Optional.) A callable function that returns a sorting key for each sample. If not
-                specified, leave the batch as it is.
+            sort_cache_by: (Optional.) A callable function that returns a sorting key for each sample. If not
+                specified, leave the cache as it is. The samples will be sorted in ascending order.
+            sort_batch_by: (Optional.) A callable function that returns a sorting key for each sample. If not
+                specified, leave the batch as it is. The samples will be sorted in ascending order.
+            drop_tails: (Optional.) Whether the last samples of the dataset that cannot fill a batch should be dropped.
         """
         super().__init__()
-        self.reader = reader
-        self.batch_size = batch_size
-        self.sample_size_fn = sample_size_fn
-        self.collate_fn = collate_fn
-        self.cache_size = cache_size
-        self.sort_desc_by = sort_desc_by
+        self._reader = reader
+        self._batch_size = batch_size
+        self._sample_size_fn = sample_size_fn
+        self._collate_fn = collate_fn
+        self._cache_size = cache_size
+        self._sort_cache_by = sort_cache_by
+        self._sort_batch_by = sort_batch_by
+        self._drop_tails = drop_tails
 
-        if collate_fn is None:
-            collate_fn = no_op
-
-        self.sample_size_fn = sample_size_fn
-        self.collate_fn = collate_fn
+        self._sample_size_fn = sample_size_fn
+        self._collate_fn = collate_fn
 
         # bookkeeping params
-        self.step_in_epoch = -1
-        self.step = -1
-        self.epoch = 0
+        self._step_in_epoch = -1
+        self._step = -1
+        self._epoch = 0
 
-        self.cache = Cache(cache_size, sample_size_fn)
-        self.remains = []
+        self._cache = Cache(cache_size, sample_size_fn)
+        self._remains = []
 
-        self._exclusions = ['sample_size_fn', 'collate_fn', 'sort_desc_by']
+        self._exclusions = ['_sample_size_fn', '_collate_fn', '_sort_cache_by', '_sort_batch_by']
 
         self.check_batch_size(batch_size, cache_size)
         self.reset()
+
+    @property
+    def cache_size(self):
+        return self._cache_size
+
+    @property
+    def step_in_epoch(self):
+        return self._step_in_epoch
+
+    @property
+    def step(self):
+        return self._step
+
+    @property
+    def batch_size(self):
+        return self._batch_size
 
     def set_batch_size(self, batch_size) -> None:
         """Allows dynamic batch size at runtime.
@@ -69,7 +85,7 @@ class Iterator(Persistable):
 
         """
         self.check_batch_size(batch_size)
-        self.batch_size = batch_size
+        self._batch_size = batch_size
 
     def check_batch_size(self, batch_size, cache_size=None) -> None:
         """Checks whether batch_size is < cache_size.
@@ -81,7 +97,7 @@ class Iterator(Persistable):
             cache_size: A `int` scalar.
 
         """
-        cache_size = cache_size or self.cache_size
+        cache_size = cache_size or self._cache_size
         if batch_size > cache_size:
             raise RuntimeError(
                 f'Batch size ({batch_size}) should be less than cache size ({cache_size}). '
@@ -89,17 +105,22 @@ class Iterator(Persistable):
             )
 
     def reset(self):
-        self.step_in_epoch = -1
-        self.step = -1
-        self.epoch = 0
-        self.remains.clear()
-        self.cache.pop_all()  # discard
-        self.reader = iter(self.reader)
+        self._step_in_epoch = -1
+        self._step = -1
+        self._epoch = 0
+        self._remains.clear()
+        self._cache.pop_all()  # discard
+        self._reader = iter(self._reader)
 
     def reset_epoch(self):
-        self.step_in_epoch = -1
-        self.remains.clear()
-        self.cache.pop_all()
+        self._step_in_epoch = -1
+        self._remains.clear()
+        self._cache.pop_all()
+
+    def _prepare_batch(self, batch: Batch):
+        if self._collate_fn:
+            batch.process(self._collate_fn)
+        return batch
 
     def iter_epoch(self):
         """Iterate through the dataset for one epoch.
@@ -109,64 +130,74 @@ class Iterator(Persistable):
 
         """
         # self.reset_epoch()
-        cache = self.cache
-        remains = self.remains
+        cache = self._cache
+        remains = self._remains
 
         end_of_epoch = False
+
         sort_batch = False
         while True:
-            batch = Batch(self.batch_size, self.sample_size_fn)
-            if cache.effective_size() < self.batch_size * 2 / 3.0:
+            batch = Batch(self._batch_size, self._sample_size_fn)
+            if cache.effective_size() < self._batch_size * 2 / 3.0:
                 if end_of_epoch:
                     # Raise error when the whole dataset cannot form a batch
-                    if self.step == -1:
+                    if self._step == -1:
                         raise RuntimeError(
                             f'Size of the dataset ({len(remains)}) '
-                            f'is smaller than batch size ({self.batch_size}). '
+                            f'is smaller than batch size ({self._batch_size}). '
                             f'Please lower the batch size or '
                             f'check whether the dataset is too small.'
                         )
-                    self.reader = iter(self.reader)
-                    break
+                    self._reader = iter(self._reader)
+
+                    if self._drop_tails or len(remains) == 0:
+                        break
+                    else:
+                        # The last batch
+                        batch.from_list(remains, self._batch_size)
+                        batch.from_iter(cache, self._batch_size)
+                        batch.sort(self._sort_batch_by or self._sort_cache_by)
+                        self._step_in_epoch += 1
+                        self._step += 1
+                        yield self._prepare_batch(batch)
+                        break
+
                 # Consume samples from cache before filling-in
                 remains += cache.pop_all()
                 try:
                     # Fill cache
-                    cache.from_iter(self.reader, raise_when_stopped=True)
+                    cache.from_iter(self._reader, raise_when_stopped=True)
                 except StopIteration:
                     # Mark as end
                     end_of_epoch = True
-                cache.sort(self.sort_desc_by)
-
-            if self.batch_size == self.cache_size:
-                # Simply return the cache such that the samples
-                # can be reverted to the original order later.
+                cache.sort(self._sort_cache_by)
+            if self._batch_size == self._cache_size:
+                # Simply return the cache as a batch to avoid sorting again.
                 batch = cache
-                cache = Cache(self.cache_size, self.sample_size_fn)
-                self.cache = cache
-                self.step_in_epoch += 1
-                self.step += 1
-                yield (batch, self.collate_fn(batch.samples))
-
+                cache = Cache(self._cache_size, self._sample_size_fn)
+                self._cache = cache
             else:
                 if remains:
-                    batch.from_list(remains, self.batch_size)
+                    batch.from_list(remains, self._batch_size)
                     sort_batch = True
-                batch.from_iter(cache, self.batch_size)
+                size = batch.effective_size()
+                batch.from_iter(cache, self._batch_size)
+                size_diff = batch.effective_size() - size
+                sort_batch = size_diff > 0 or sort_batch
 
-                if batch.effective_size() < self.batch_size:
-                    remains += batch.pop_all()
-                else:
-                    if sort_batch:
-                        batch.sort(self.sort_desc_by)
-                        sort_batch = False
+            if batch.effective_size() < self._batch_size:
+                remains += batch.pop_all()
+            else:
+                if sort_batch:
+                    batch.sort(self._sort_batch_by or self._sort_cache_by)
+                    sort_batch = False
 
-                    self.step_in_epoch += 1
-                    self.step += 1
-                    yield (batch, self.collate_fn(batch.samples))
+                self._step_in_epoch += 1
+                self._step += 1
+                yield self._prepare_batch(batch)
 
-        self.epoch += 1
-        self.step_in_epoch = -1
+        self._epoch += 1
+        self._step_in_epoch = -1
         raise StopIteration
 
     def while_true(self, predicate: Callable[[], bool]):

@@ -8,13 +8,18 @@ from lunas.utils import get_state_dict, load_state_dict
 
 
 class Batch(Persistable):
-    def __init__(self, size: int, size_fn: Callable[[Any], int] = None):
+    def __init__(self, max_size: int, size_fn: Callable[[Any], int] = None):
         super().__init__()
-        self.size = size
-        self.size_fn = size_fn
+        self._max_size = max_size
+        self._size_fn = size_fn
         self._samples: List[Tuple] = []
         self._sort_idx: numpy.ndarray = None
-        self._exclusions = ['size_fn']
+        self._exclusions = ['_size_fn']
+        self._data = None
+
+    @property
+    def data(self):
+        return self._data
 
     @property
     def samples(self):
@@ -35,8 +40,8 @@ class Batch(Persistable):
 
     def push(self, sample):
         size = 1
-        if self.size_fn is not None:
-            size = self.size_fn(sample)
+        if self._size_fn is not None:
+            size = self._size_fn(sample)
         sample = (sample, size)
         self._samples.append(sample)
 
@@ -52,7 +57,7 @@ class Batch(Persistable):
             raise_when_stopped:
 
         """
-        size = size or self.size
+        size = size or self._max_size
         # Approximate
         while self.effective_size() < size:
             try:
@@ -64,7 +69,7 @@ class Batch(Persistable):
                     break
 
     def from_list(self, sample_list: List, size: int = None):
-        size = size or self.size
+        size = size or self._max_size
         while self.effective_size() < size:
             try:
                 self.push(sample_list.pop(0))
@@ -80,7 +85,7 @@ class Batch(Persistable):
         Returns:
 
         """
-        size = size or self.size
+        size = size or self._max_size
         rv = []
         while self.effective_size() > size and len(self._samples) > 1:
             rv.append(self.pop(-1))
@@ -89,7 +94,7 @@ class Batch(Persistable):
     def sort(self, key_fn: Callable[[Any], int]):
         if key_fn is not None:
             keys = numpy.array(list(map(key_fn, self.samples)))
-            indices = numpy.argsort(keys)[::-1]
+            indices = numpy.argsort(keys)
             self._sort_idx = indices
             indices = list(indices)
             self._samples = [self._samples[i] for i in indices]
@@ -105,6 +110,9 @@ class Batch(Persistable):
         samples = [samples[i] for i in indices]
         return samples
 
+    def process(self, collate_fn):
+        self._data = collate_fn(self.samples)
+
     @overrides
     def state_dict(self) -> Dict:
         return get_state_dict(self, exclusions=self._exclusions)
@@ -115,8 +123,8 @@ class Batch(Persistable):
 
 
 class Cache(Batch, Iterable):
-    def __init__(self, size: int, size_fn: Callable[[Any], int] = None):
-        super().__init__(size, size_fn)
+    def __init__(self, max_size: int, size_fn: Callable[[Any], int] = None):
+        super().__init__(max_size, size_fn)
 
     def __next__(self):
         if self._samples:

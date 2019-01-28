@@ -4,3 +4,4 @@
 build/
 dist/
 Lunas.egg-info/
+publish_pypi.sh

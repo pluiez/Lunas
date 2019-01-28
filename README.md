@@ -1,6 +1,6 @@
 # Lunas
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.2.2-limegreen.svg)](https://github.com/pluiez/lunas)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.2.3-limegreen.svg)](https://github.com/pluiez/lunas)
 
 **Lunas** is a Python 3-based library that provides a set of simple interfaces for data processing pipelines and an iterator for looping through data.
 
@@ -115,7 +115,7 @@ However, you can still extend this library to suit your needs at any time to han
    # Sort samples in batch by source text length
    sort_key = lambda x: len(x[0])
 
-   it = Iterator(ds, batch_size=4096, cache_size=40960, sample_size_fn=lambda x, collate_fn=collate_fn, sort_desc_by=sort_key)
+   it = Iterator(ds, batch_size=4096, cache_size=40960, sample_size_fn=lambda x, collate_fn=collate_fn, sort_cache_by=sort_key)
 
    # Iterate 100 epoch and 1000000 steps at most.
    for batch in it.while_true(lambda: it.epoch < 100 and it.step < 1e6):
