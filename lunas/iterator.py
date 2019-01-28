@@ -74,6 +74,10 @@ class Iterator(Persistable):
         return self._step
 
     @property
+    def epoch(self):
+        return self._epoch
+
+    @property
     def batch_size(self):
         return self._batch_size
 
