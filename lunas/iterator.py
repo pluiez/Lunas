@@ -126,7 +126,7 @@ class Iterator(Persistable):
             batch.process(self._collate_fn)
         return batch
 
-    def iter_epoch(self):
+    def iter_epoch(self, before_epoch=None, after_epoch=None):
         """Iterate through the dataset for one epoch.
 
         For the last batch, it will be dropped if its size is smaller
@@ -140,6 +140,9 @@ class Iterator(Persistable):
         end_of_epoch = False
 
         sort_batch = False
+        if before_epoch is not None and self._step_in_epoch == -1:
+            before_epoch()
+
         while True:
             batch = Batch(self._batch_size, self._sample_size_fn)
             if cache.effective_size() < self._batch_size * 2 / 3.0:
@@ -200,11 +203,14 @@ class Iterator(Persistable):
                 self._step += 1
                 yield self._prepare_batch(batch)
 
+        if after_epoch is not None:
+            after_epoch()
+
         self._epoch += 1
         self._step_in_epoch = -1
         raise StopIteration
 
-    def while_true(self, predicate: Callable[[], bool]):
+    def while_true(self, predicate: Callable[[], bool], before_epoch=None, after_epoch=None):
         """Iterates through the dataset by a given stopping criteria.
 
         Args:
@@ -215,21 +221,19 @@ class Iterator(Persistable):
             (batch, inputs): A `Tuple` consists of a `Batch` object and model inputs. When `self.collate_fn`
                 is None, the returned `inputs` is also None.
         """
-        epoch_iter = self.iter_epoch()
+        epoch_iter = self.iter_epoch(before_epoch, after_epoch)
 
         while predicate():
             try:
                 batch = next(epoch_iter)
             except StopIteration:
-                # self.epoch += 1
-                # self.step_in_epoch = -1
-                epoch_iter = self.iter_epoch()
+                epoch_iter = self.iter_epoch(before_epoch, after_epoch)
                 continue
 
             yield batch
 
-    def __call__(self, while_predicate: Callable[[], bool]):
-        return self.while_true(while_predicate)
+    def __call__(self, while_predicate: Callable[[], bool], before_epoch=None, after_epoch=None):
+        return self.while_true(while_predicate, before_epoch, after_epoch)
 
     @overrides
     def state_dict(self) -> Dict:
