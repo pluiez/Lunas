@@ -185,6 +185,7 @@ class Reader(BaseReader):
         self._fast_skip: bool = False
         # Indicates position in the dataset.
         self._cursor: int = -1
+        self._stop_iteration = False
 
         self._exclusions += ['_fns', '_buffer']
 
@@ -195,6 +196,7 @@ class Reader(BaseReader):
 
     @overrides
     def reset_cursor(self):
+        self._stop_iteration = False
         self._cursor: int = -1
 
     def get_effective_buffer_size(self) -> int:
@@ -210,15 +212,18 @@ class Reader(BaseReader):
         return buffer
 
     def _fill_buffer(self) -> int:
-        buffer = self._buffer
-        while self.get_effective_buffer_size() < self._buffer_size:
-            try:
-                buffer.append(self.next())
-            except StopIteration:
-                break
-        size = len(buffer)
-        if not self._fast_skip and size > 0:
-            self.process_buffer()
+        size = 0
+        if not self._stop_iteration:
+            buffer = self._buffer
+            while self.get_effective_buffer_size() < self._buffer_size:
+                try:
+                    buffer.append(self.next())
+                except StopIteration as e:
+                    self._stop_iteration = True
+                    break
+            size = len(buffer)
+            if not self._fast_skip and size > 0:
+                self.process_buffer()
         return size
 
     @overrides

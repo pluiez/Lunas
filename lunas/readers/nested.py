@@ -16,9 +16,9 @@ class Shuffle(NestedReader):
 
     @overrides
     def _fill_buffer(self):
-        rv = super()._fill_buffer()
+        size = super()._fill_buffer()
         self._shuffle_buffer()
-        return rv
+        return size
 
     @overrides
     def __iter__(self):

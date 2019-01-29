@@ -223,16 +223,20 @@ class Iterator(Persistable):
         """
         epoch_iter = self.iter_epoch(before_epoch, after_epoch)
 
-        while predicate():
-            try:
-                batch = next(epoch_iter)
-            except StopIteration:
-                epoch_iter = self.iter_epoch(before_epoch, after_epoch)
-                continue
+        if predicate is not None:
+            while predicate():
+                try:
+                    batch = next(epoch_iter)
+                except StopIteration:
+                    epoch_iter = self.iter_epoch(before_epoch, after_epoch)
+                    continue
 
-            yield batch
+                yield batch
+        else:
+            for batch in epoch_iter:
+                yield batch
 
-    def __call__(self, while_predicate: Callable[[], bool], before_epoch=None, after_epoch=None):
+    def __call__(self, while_predicate: Callable[[], bool] = None, before_epoch=None, after_epoch=None):
         return self.while_true(while_predicate, before_epoch, after_epoch)
 
     @overrides
