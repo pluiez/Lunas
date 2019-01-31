@@ -49,8 +49,8 @@ class Iterator(Persistable):
         self._collate_fn = collate_fn
 
         # bookkeeping params
-        self._step_in_epoch = -1
-        self._step = -1
+        self._step_in_epoch = 0
+        self._step = 0
         self._epoch = 0
 
         self._cache = Cache(cache_size, sample_size_fn)
@@ -109,15 +109,15 @@ class Iterator(Persistable):
             )
 
     def reset(self):
-        self._step_in_epoch = -1
-        self._step = -1
+        self._step_in_epoch = 0
+        self._step = 0
         self._epoch = 0
         self._remains.clear()
         self._cache.pop_all()  # discard
         self._reader = iter(self._reader)
 
     def reset_epoch(self):
-        self._step_in_epoch = -1
+        self._step_in_epoch = 0
         self._remains.clear()
         self._cache.pop_all()
 
@@ -140,7 +140,7 @@ class Iterator(Persistable):
         end_of_epoch = False
 
         sort_batch = False
-        if before_epoch is not None and self._step_in_epoch == -1:
+        if before_epoch is not None and self._step_in_epoch == 0:
             before_epoch()
 
         while True:
@@ -148,7 +148,7 @@ class Iterator(Persistable):
             if cache.effective_size() < self._batch_size * 2 / 3.0:
                 if end_of_epoch:
                     # Raise error when the whole dataset cannot form a batch
-                    if self._step == -1:
+                    if self._step == 0:
                         raise RuntimeError(
                             f'Size of the dataset ({len(remains)}) '
                             f'is smaller than batch size ({self._batch_size}). '
@@ -207,7 +207,7 @@ class Iterator(Persistable):
             after_epoch()
 
         self._epoch += 1
-        self._step_in_epoch = -1
+        self._step_in_epoch = 0
         raise StopIteration
 
     def while_true(self, predicate: Callable[[], bool], before_epoch=None, after_epoch=None):
