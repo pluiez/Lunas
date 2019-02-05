@@ -1,8 +1,8 @@
 from multiprocessing.pool import ThreadPool
-from typing import Callable, Any, Iterable
+from typing import Callable, Any, List
 
 
-def parallel_map(fn: Callable[[Any], Any], inputs: Iterable[Any], num_thread: int):
+def parallel_map(fn: Callable[[Any], Any], inputs: List[Any], num_thread: int):
     """Applies a function to a list of inputs in parallel.
 
     Uses a Threading pool to process inputs in parallel.
@@ -19,6 +19,7 @@ def parallel_map(fn: Callable[[Any], Any], inputs: Iterable[Any], num_thread: in
         return list(map(fn, inputs))
     pool = ThreadPool(num_thread)
     results = pool.map(fn, inputs)
+
     pool.close()
     pool.join()
     return results

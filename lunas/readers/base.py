@@ -2,10 +2,9 @@ import abc
 import itertools
 from typing import List, Dict, Callable, Any
 
-from overrides import overrides
-
 from lunas.persistable import Persistable
 from lunas.utils import parallel_map, get_state_dict, load_state_dict
+from overrides import overrides
 
 
 class BaseReader(Persistable):
@@ -190,6 +189,14 @@ class Reader(BaseReader):
         self._exclusions += ['_fns', '_buffer']
 
     @overrides
+    def size(self) -> int:
+        raise NotImplementedError
+
+    @overrides
+    def next(self) -> Any:
+        raise NotImplementedError
+
+    @overrides
     def cursor(self) -> int:
         self._cursor += 1
         return self._cursor
@@ -218,7 +225,7 @@ class Reader(BaseReader):
             while self.get_effective_buffer_size() < self._buffer_size:
                 try:
                     buffer.append(self.next())
-                except StopIteration as e:
+                except StopIteration:
                     self._stop_iteration = True
                     break
             size = len(buffer)
@@ -239,10 +246,14 @@ class Reader(BaseReader):
     @overrides
     def _apply(self, sample: Any) -> Any:
         if sample is None:
-            return sample
+            return None
 
         for fn in self._fns:
-            new_sample = fn(sample)
+            if isinstance(sample, (tuple, list)):
+                new_sample = fn(*sample)
+            else:
+                new_sample = fn(sample)
+
             # Stops when predicate is evaluated to False.
             if new_sample is False:
                 return None

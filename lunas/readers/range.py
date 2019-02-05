@@ -1,8 +1,7 @@
 from typing import Any
 
-from overrides import overrides
-
 from lunas.readers.base import Reader
+from overrides import overrides
 
 
 class Range(Reader):

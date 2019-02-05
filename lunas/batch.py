@@ -1,10 +1,9 @@
 from typing import List, Iterable, Dict, Callable, Any, Tuple
 
 import numpy
-from overrides import overrides
-
 from lunas.persistable import Persistable
 from lunas.utils import get_state_dict, load_state_dict
+from overrides import overrides
 
 
 class Batch(Persistable):

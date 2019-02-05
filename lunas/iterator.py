@@ -1,11 +1,10 @@
 from typing import List, Dict, Callable, Any
 
-from overrides import overrides
-
 from lunas.batch import Batch, Cache
 from lunas.persistable import Persistable
 from lunas.readers import Reader
 from lunas.utils import get_state_dict, load_state_dict
+from overrides import overrides
 
 
 class Iterator(Persistable):
@@ -18,7 +17,7 @@ class Iterator(Persistable):
     def __init__(self, reader: Reader, batch_size, cache_size: int = 1000, sample_size_fn: Callable[[Any], int] = None,
                  collate_fn: Callable[[List[Any]], Any] = None, sort_cache_by: Callable[[Any], int] = None,
                  sort_batch_by: Callable[[Any], int] = None,
-                 drop_tails=True):
+                 drop_tails=False):
         """Initialize the iterator.
 
         Args:
@@ -216,6 +215,8 @@ class Iterator(Persistable):
         Args:
             predicate: A callable function. This function is evaluated to determine
             whether iteration should continue or not.
+            before_epoch:
+            after_epoch:
 
         Returns:
             (batch, inputs): A `Tuple` consists of a `Batch` object and model inputs. When `self.collate_fn`

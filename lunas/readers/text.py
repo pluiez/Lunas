@@ -1,15 +1,14 @@
-from typing import TextIO, Any
-
-from overrides import overrides
+from typing import Any
 
 from lunas.readers.base import Reader
+from overrides import overrides
 
 
 class TextLine(Reader):
     def __init__(self, filename: str, buffer_size: int = 10000, num_threads: int = 1):
         super().__init__(buffer_size, num_threads)
         self._filename = filename
-        self._fd: TextIO = None
+        self._fd = None
         self._exclusions += ['_fd']
         self._num_line = -1
 
