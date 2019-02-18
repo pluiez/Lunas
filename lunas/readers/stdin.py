@@ -1,14 +1,15 @@
 import sys
-from typing import Any
 
-from lunas.readers.base import Reader
 from overrides import overrides
 
+from lunas.readers.base import BaseReader
 
-class Stdin(Reader):
-    def __init__(self, buffer_size: int = 10000, num_threads: int = 1):
-        super().__init__(buffer_size, num_threads)
-        self._exclusions += ['_fd']
+
+class Stdin(BaseReader):
+    def __init__(self, bufsize: int = 10000, num_threads: int = 1,sentinel=''):
+        super().__init__(bufsize, num_threads)
+        self._iterator = None
+        self._sentinel=sentinel
         self._num_line = 0
 
     @overrides
@@ -16,14 +17,21 @@ class Stdin(Reader):
         return sys.maxsize
 
     @overrides
-    def finalize(self):
-        self._num_line = 0
-        super().finalize()
-
-    @overrides
-    def next(self) -> Any:
-        line = sys.stdin.readline()
-        if line == '':
-            raise StopIteration
+    def next(self):
+        line=next(self._iterator)
         self._num_line += 1
         return line
+
+    @overrides
+    def _reset_cursor(self):
+        self._reset()
+        super()._reset_cursor()
+
+    def _reset(self):
+        self._iterator = iter(sys.stdin.readline, self._sentinel)
+
+    @overrides
+    def _finalize(self):
+        self._num_line = 0
+        self._iterator = None
+        super()._finalize()

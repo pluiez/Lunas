@@ -1,10 +1,12 @@
+from collections import deque
 from typing import List, Dict, Callable, Any
+
+from overrides import overrides
 
 from lunas.batch import Batch, Cache
 from lunas.persistable import Persistable
-from lunas.readers import Reader
+from lunas.readers import BaseReader
 from lunas.utils import get_state_dict, load_state_dict
-from overrides import overrides
 
 
 class Iterator(Persistable):
@@ -14,10 +16,10 @@ class Iterator(Persistable):
     the iteration state.
     """
 
-    def __init__(self, reader: Reader, batch_size, cache_size: int = 1000, sample_size_fn: Callable[[Any], int] = None,
+    def __init__(self, reader: BaseReader, batch_size, cache_size: int = 1000, sample_size_fn: Callable[[Any], int] = None,
                  collate_fn: Callable[[List[Any]], Any] = None, sort_cache_by: Callable[[Any], int] = None,
                  sort_batch_by: Callable[[Any], int] = None,
-                 drop_tails=False):
+                 drop_tails=False, strip_batch=False):
         """Initialize the iterator.
 
         Args:
@@ -33,6 +35,7 @@ class Iterator(Persistable):
             sort_batch_by: (Optional.) A callable function that returns a sorting key for each sample. If not
                 specified, leave the batch as it is. The samples will be sorted in ascending order.
             drop_tails: (Optional.) Whether the last samples of the dataset that cannot fill a batch should be dropped.
+            strip_batch:
         """
         super().__init__()
         self._reader = reader
@@ -43,6 +46,7 @@ class Iterator(Persistable):
         self._sort_cache_by = sort_cache_by
         self._sort_batch_by = sort_batch_by
         self._drop_tails = drop_tails
+        self._strip_batch = strip_batch
 
         self._sample_size_fn = sample_size_fn
         self._collate_fn = collate_fn
@@ -53,9 +57,11 @@ class Iterator(Persistable):
         self._epoch = 0
 
         self._cache = Cache(cache_size, sample_size_fn)
-        self._remains = []
+        self._remains: deque = deque()
+        self._stripped: deque = deque()
 
-        self._exclusions = ['_sample_size_fn', '_collate_fn', '_sort_cache_by', '_sort_batch_by']
+        self._inclusions = ['_inclusions', '_reader', '_step', '_step_in_epoch', '_epoch', '_cache', '_remains',
+                            '_stripped']
 
         self.check_batch_size(batch_size, cache_size)
         self.reset()
@@ -120,11 +126,6 @@ class Iterator(Persistable):
         self._remains.clear()
         self._cache.pop_all()
 
-    def _prepare_batch(self, batch: Batch):
-        if self._collate_fn:
-            batch.process(self._collate_fn)
-        return batch
-
     def iter_epoch(self, before_epoch=None, after_epoch=None):
         """Iterate through the dataset for one epoch.
 
@@ -135,22 +136,23 @@ class Iterator(Persistable):
         # self.reset_epoch()
         cache = self._cache
         remains = self._remains
+        stripped = self._stripped
 
         end_of_epoch = False
 
         sort_batch = False
-        if before_epoch is not None and self._step_in_epoch == 0:
+        if before_epoch is not None and self.step_in_epoch == 0:
             before_epoch()
 
         while True:
-            batch = Batch(self._batch_size, self._sample_size_fn)
-            if cache.effective_size() < self._batch_size * 2 / 3.0:
+            batch = Batch(self.batch_size, self._sample_size_fn)
+            if cache.effective_size < self.batch_size * 2 / 3.0:
                 if end_of_epoch:
                     # Raise error when the whole dataset cannot form a batch
-                    if self._step == 0:
+                    if self.step == 0:
                         raise RuntimeError(
                             f'Size of the dataset ({len(remains)}) '
-                            f'is smaller than batch size ({self._batch_size}). '
+                            f'is smaller than batch size ({self.batch_size}). '
                             f'Please lower the batch size or '
                             f'check whether the dataset is too small.'
                         )
@@ -160,8 +162,8 @@ class Iterator(Persistable):
                         break
                     else:
                         # The last batch
-                        batch.from_list(remains, self._batch_size)
-                        batch.from_iter(cache, self._batch_size)
+                        batch.from_deque(remains, self.batch_size)
+                        batch.from_iter(cache, self.batch_size)
                         batch.sort(self._sort_batch_by or self._sort_cache_by)
                         self._step_in_epoch += 1
                         self._step += 1
@@ -177,23 +179,33 @@ class Iterator(Persistable):
                     # Mark as end
                     end_of_epoch = True
                 cache.sort(self._sort_cache_by)
-            if self._batch_size == self._cache_size:
+
+            if self.batch_size == self.cache_size:
                 # Simply return the cache as a batch to avoid sorting again.
                 batch = cache
-                cache = Cache(self._cache_size, self._sample_size_fn)
+                cache = Cache(self.cache_size, self._sample_size_fn)
                 self._cache = cache
             else:
+                if stripped:
+                    batch.from_deque(stripped, self.batch_size)
                 if remains:
-                    batch.from_list(remains, self._batch_size)
+                    batch.from_deque(remains, self.batch_size)
                     sort_batch = True
-                size = batch.effective_size()
-                batch.from_iter(cache, self._batch_size)
-                size_diff = batch.effective_size() - size
+                size_diff = batch.from_iter(cache, self.batch_size)
                 sort_batch = size_diff > 0 or sort_batch
 
-            if batch.effective_size() < self._batch_size:
+            if batch.effective_size < self.batch_size:
+                # the cache is exhausted while batch is not filled
+                # for the last unfilled batch, revert it
+                if end_of_epoch:
+                    batch.revert()
                 remains += batch.pop_all()
             else:
+                # filled
+                # strip batch size
+                if self._strip_batch:
+                    stripped += batch.strip(self.batch_size)
+
                 if sort_batch:
                     batch.sort(self._sort_batch_by or self._sort_cache_by)
                     sort_batch = False
@@ -207,7 +219,6 @@ class Iterator(Persistable):
 
         self._epoch += 1
         self._step_in_epoch = 0
-        raise StopIteration
 
     def while_true(self, predicate: Callable[[], bool], before_epoch=None, after_epoch=None):
         """Iterates through the dataset by a given stopping criteria.
@@ -237,13 +248,18 @@ class Iterator(Persistable):
             for batch in epoch_iter:
                 yield batch
 
-    def __call__(self, while_predicate: Callable[[], bool] = None, before_epoch=None, after_epoch=None):
-        return self.while_true(while_predicate, before_epoch, after_epoch)
-
     @overrides
     def state_dict(self) -> Dict:
-        return get_state_dict(self, exclusions=self._exclusions, recursive=True)
+        return get_state_dict(self, recursive=True, inclusions=self._inclusions)
 
     @overrides
     def load_state_dict(self, state_dict: Dict) -> None:
         load_state_dict(self, state_dict)
+
+    def _prepare_batch(self, batch: Batch):
+        if self._collate_fn:
+            batch.process(self._collate_fn)
+        return batch
+
+    def __call__(self, while_predicate: Callable[[], bool] = None, before_epoch=None, after_epoch=None):
+        return self.while_true(while_predicate, before_epoch, after_epoch)

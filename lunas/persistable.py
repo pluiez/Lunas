@@ -7,7 +7,7 @@ class Persistable(object):
     """
     __metaclass__ = abc.ABCMeta
 
-    @abc.abstractclassmethod
+    @abc.abstractmethod
     def state_dict(self) -> Dict:
         """Returns a dictionary representing the state of the class.
 
@@ -20,7 +20,7 @@ class Persistable(object):
         """
         raise NotImplementedError
 
-    @abc.abstractclassmethod
+    @abc.abstractmethod
     def load_state_dict(self, state_dict: Dict) -> None:
         """Restores the state by a given state.
 

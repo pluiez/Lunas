@@ -2,15 +2,15 @@ import sys
 
 from setuptools import setup, find_packages
 
-if sys.version_info < (3,):
-    sys.exit('Sorry, Python3 is required for thseq.')
+if sys.version_info < (3, 7):
+    sys.exit('Sorry, Python 3.7+ is required for Lunas.')
 
 with open('requirements.txt') as r:
     requires = [l.strip() for l in r]
 
 setup(
     name='Lunas',
-    version='0.2.8',
+    version='0.3.0',
     author='Seann Zhang',
     author_email='pluiefox@live.com',
     packages=find_packages(),
@@ -22,10 +22,10 @@ setup(
     long_description_content_type="text/markdown",
     install_requires=requires,
     classifiers=[
-        "Programming Language :: Python :: 3",
+        "Programming Language :: Python :: 3.7",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    python_requires='>=3',
+    python_requires='>=3.7',
 
 )

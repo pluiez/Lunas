@@ -1,15 +1,17 @@
 from typing import Any
 
-from lunas.readers.base import Reader
 from overrides import overrides
 
+from lunas.readers.base import BaseReader
 
-class TextLine(Reader):
-    def __init__(self, filename: str, buffer_size: int = 10000, num_threads: int = 1):
-        super().__init__(buffer_size, num_threads)
+
+class TextLine(BaseReader):
+    def __init__(self, filename: str, bufsize: int = 10000, num_threads: int = 1):
+        super().__init__(bufsize, num_threads)
         self._filename = filename
         self._fd = None
-        self._exclusions += ['_fd']
+        self._iterator = None
+        self._inclusions += ['_filename', '_num_line']
         self._num_line = -1
 
     @overrides
@@ -23,23 +25,23 @@ class TextLine(Reader):
         return self._num_line
 
     @overrides
-    def reset_cursor(self):
+    def next(self) -> Any:
+        line = next(self._iterator)
+        return line
+
+    @overrides
+    def _reset_cursor(self):
         self._reset()
-        super().reset_cursor()
+        super()._reset_cursor()
 
     def _reset(self):
-        self.finalize()
+        self._finalize()
         self._fd = open(self._filename)
+        self._iterator = iter(self._fd)
 
     @overrides
-    def finalize(self):
+    def _finalize(self):
         if self._fd is not None and not self._fd.closed:
             self._fd.close()
-        super().finalize()
-
-    @overrides
-    def next(self) -> Any:
-        line = self._fd.readline()
-        if line == '':
-            raise StopIteration
-        return line
+        self._iterator = None
+        super()._finalize()

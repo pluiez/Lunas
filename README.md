@@ -1,6 +1,7 @@
+
 # Lunas
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.2.8-limegreen.svg)](https://github.com/pluiez/lunas)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.3.0-limegreen.svg)](https://github.com/pluiez/lunas)
 
 **Lunas** is a Python 3-based library that provides a set of simple interfaces for data processing pipelines and an iterator for looping through data.
 
@@ -17,9 +18,9 @@ Basically, Lunas draws its data-handling style on *Tensorflow*, *PyTorch*, and s
 5. Handling multiple input sources.
 6. Persistable.
 
-`DataIterator` An iterator performs multi-pass iterations over the dataset and maintains the iteration state:
+`Iterator` An iterator performs multi-pass iterations over the dataset and maintains the iteration state:
 
-1. Dynamic batch size at runtime.
+1. Dynamic batching at runtime.
 2. Custom stopping criteria.
 3. Sort samples of a batch, which is useful for learning text presentation by RNNs in *PyTorch*.
 4. Persistable.
@@ -31,10 +32,12 @@ Basically, Lunas draws its data-handling style on *Tensorflow*, *PyTorch*, and s
 - Numpy
 - overrides
 - typings
-- Python = 3.x
+- Python >= 3.7
 
 Lunas hardly relies on any third-party libraries, all the required libraries are just
 to take advantage of the type hint feature provided by Python 3.
+
+Type hint feature is used in this project and the built-in typing module for Python version lower than 3.7 can decrease the performance. However, this is solved since Python 3.7. So Lunas currently requires python 3.7 to work efficiently.
 
 ## Installation
 
@@ -53,7 +56,7 @@ However, you can still extend this library to suit your needs at any time to han
 1. Create a dataset reader and iterate through it.
 
    ```python
-   from lunas.readers import Range
+   from lunas import Range
 
    ds = Range(10)
    for sample in ds:
@@ -79,11 +82,11 @@ However, you can still extend this library to suit your needs at any time to han
 3. Deal with multiple input sources.
 
    ```python
-   from lunas.readers import Range, Zip, Shuffle
+   from lunas import Range, Zip, Shuffle
 
    ds1 = Range(10)
    ds2 = Range(10)
-   ds = Zip(ds1, ds2).select(lambda x: x[0] + x[1])
+   ds = Zip(ds1, ds2).select(lambda x,y: x + y)
    ds = Shuffle(ds)
    ```
 
@@ -93,29 +96,34 @@ However, you can still extend this library to suit your needs at any time to han
 4. Practical use case in Machine Translation scenario.
 
    ```python
-   from lunas.readers import TextLine
-   from lunas.iterator import Iterator
+   from lunas import TextLine, Iterator
 
    # Tokenize the input into a list of tokens.
-   tokenize = lambda line: line.split()
+   source = TextLine('train.fr').select(lambda x: x.split())
+   target = TextLine('train.en').select(lambda x: x.split()) 
    # Ensure the inputs are of length no exceeding 50.
-   limit = lambda src_tgt: max(map(len, src_tgt)) <= 50
+   ds = Zip(source, target).select(lambda x, y: 
+		   {
+			   x: src_vocab.convert(x),
+			   y: trg_vocab.covert(y),
+			   size_x: len(x),
+			   size_y: len(y),
+		   }
+	   )
+   ds = ds.where(lambda x: max(x['size_x'], x['size_y']) <= 50)
    # Map word to id.
-   word2id = lambda src_tgt: ...
+   ds = Shuffle(ds, shufsize=-1)
 
-   source = TextLine('train.fr').select(tokenize)
-   target = TextLine('train.en').select(tokenize)
-   ds = Zip(source, target).where(limit)
-   ds = Shuffle().select(word2id)
-
-   # Take maximum length of the sentence pair as sample_size
-   sample_size = lambda x: max(map(len), x)
    # Convert a list of samples to model inputs
    collate_fn = lambda x: ...
    # Sort samples in batch by source text length
-   sort_key = lambda x: len(x[0])
+   sort_key = lambda x: len(x['size_x'])
 
-   it = Iterator(ds, batch_size=4096, cache_size=40960, sample_size_fn=lambda x, collate_fn=collate_fn, sort_cache_by=sort_key)
+   it = Iterator(ds, batch_size=4096, 
+	     cache_size=4096 * 32, 
+	     sample_size_fn=lambda x: x['size_x'], 
+	     collate_fn=collate_fn, 
+	     sort_cache_by=sort_key)
 
    # Iterate 100 epoch and 1000000 steps at most.
    for batch in it.while_true(lambda: it.epoch < 100 and it.step < 1e6):

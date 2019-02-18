@@ -1,54 +1,110 @@
+import itertools
+from collections import deque
 from typing import List, Dict
 
 import numpy
-from lunas.readers.base import BaseReader, Reader, NestedReader
 from overrides import overrides
 
+from lunas.readers.base import BaseReader
 
-class Shuffle(NestedReader):
-    def __init__(self, reader: Reader, shuffle_size=None, buffer_size: int = 10000, num_threads: int = 1):
+
+class Nested(BaseReader):
+    def __init__(self, reader, bufsize: int = 10000, num_threads: int = 1):
+        super().__init__(bufsize, num_threads)
+        multi_reader = isinstance(reader, (list, tuple))
+        if not multi_reader:
+            reader = [reader]
+        for r in reader:
+            r._fast_skip = True
+        self.reader = reader
+        self._multi_reader = multi_reader
+        self._inclusions += ['reader', '_multi_reader']
+
+    @overrides
+    def size(self) -> int:
+        return len(self.reader[0])
+
+    @overrides
+    def next(self):
+        sample = tuple([r._buffered_next() for r in self.reader])
+        return sample if self._multi_reader else sample[0]
+
+    @overrides
+    def state_dict(self) -> Dict:
+        state = super().state_dict()
+        state['reader'] = [r.state_dict() for r in self.reader]
+        return state
+
+    @overrides
+    def load_state_dict(self, state_dict: Dict) -> None:
+        for r, state in zip(self.reader, state_dict['reader']):
+            r.load_state_dict(state)
+        del state_dict['reader']
+
+        super().load_state_dict(state_dict)
+
+    @overrides
+    def _process_buffer(self, buffer=None, inplace=True):
+        buffer = self._buffer if buffer is None else buffer
+        reader = self.reader
+        if self._multi_reader:
+            new_buffer = list(zip(
+                *[r._process_buffer(buf, inplace=False) for r, buf in
+                  zip(reader, itertools.zip_longest(*buffer))]))
+            new_buffer = list(map(
+                lambda sample: sample if all(s is not None for s in sample) else None,
+                new_buffer
+            ))
+        else:
+            new_buffer = reader[0]._process_buffer(buffer, inplace=False)
+
+        return super()._process_buffer(new_buffer, inplace)
+
+    @overrides
+    def _finalize(self):
+        for reader in self.reader:
+            reader._finalize()
+        super()._finalize()
+
+    @overrides
+    def __iter__(self):
+        self.reader = list(map(iter, self.reader))
+        return super().__iter__()
+
+
+class Shuffle(Nested):
+    def __init__(self, reader: BaseReader, shufsize=None, bufsize: int = 10000, num_threads: int = 1):
         """
         Apply random permutation to a given reader.
         Args:
             reader:
-            shuffle_size: sequentially read samples from a reader into a fixed-sized buffer for permutation.
-            buffer_size: process samples in buffer in parallel.
+            shufsize: sequentially read samples from a reader into a fixed-sized buffer for permutation.
+            bufsize: process samples in buffer in parallel.
             num_threads: number of threads for parallel processing.
         """
-        if shuffle_size < 0:
-            shuffle_size = len(reader)
-        shuffle_size = shuffle_size or buffer_size
+        if not shufsize or shufsize < 0:
+            shufsize = len(reader)
+        shufsize = shufsize or bufsize
 
-        assert shuffle_size > 0, shuffle_size
+        assert shufsize > 0, shufsize
 
-        super().__init__(reader, buffer_size, num_threads)
+        super().__init__(reader, bufsize, num_threads)
 
-        self._shuffle_size = shuffle_size
-        self._shuffled_buffer = []
+        self._shufsize = shufsize
+        self._shuffled_buffer: deque = deque()
         self._random_state = numpy.random.get_state()
 
-    def _shuffle(self):
-        buffer = self._shuffled_buffer
-        while len(buffer) < self._shuffle_size:
-            try:
-                buffer.append(super().next())
-            except StopIteration:
-                break
-        numpy.random.shuffle(buffer)
+        self._inclusions += ['_random_state']
 
     @overrides
     def next(self):
         if not self._shuffled_buffer:
             self._shuffle()
         try:
-            return self._shuffled_buffer.pop(0)
+            sample = self._shuffled_buffer.popleft()
         except IndexError:
             raise StopIteration
-
-    @overrides
-    def __iter__(self):
-        self._random_state = numpy.random.get_state()
-        return super().__iter__()
+        return sample
 
     @overrides
     def load_state_dict(self, state_dict: Dict) -> None:
@@ -56,13 +112,29 @@ class Shuffle(NestedReader):
         del state_dict['_random_state']
         super().load_state_dict(state_dict)
 
+    def _shuffle(self):
+        buffer = self._shuffled_buffer
+        while len(buffer) < self._shufsize:
+            try:
+                buffer.append(super().next())
+            except StopIteration:
+                break
+        buffer = list(buffer)
+        numpy.random.shuffle(buffer)
+        self._shuffled_buffer = deque(buffer)
 
-class Zip(NestedReader):
-    def __init__(self, reader: List[BaseReader], buffer_size: int = 10000, num_threads: int = 1):
-        super().__init__(reader, buffer_size, num_threads)
+    @overrides
+    def __iter__(self):
+        self._random_state = numpy.random.get_state()
+        return super().__iter__()
+
+
+class Zip(Nested):
+    def __init__(self, reader: List[BaseReader], bufsize: int = 10000, num_threads: int = 1):
+        super().__init__(reader, bufsize, num_threads)
         sizes = list(map(len, reader))
         if len(set(sizes)) != 1:
             raise RuntimeError(
                 f'Sizes of datasets {tuple(sizes)} must match.'
             )
-        self._exclusions += ['reader']
+        self._inclusions += ['reader']

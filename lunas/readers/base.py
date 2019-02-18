@@ -1,10 +1,11 @@
+from __future__ import annotations
+
 import abc
-import itertools
+from collections import deque
 from typing import List, Dict, Callable, Any
 
 from lunas.persistable import Persistable
 from lunas.utils import parallel_map, get_state_dict, load_state_dict
-from overrides import overrides
 
 
 class BaseReader(Persistable):
@@ -15,68 +16,26 @@ class BaseReader(Persistable):
     """
     __metaclass__ = abc.ABCMeta
 
-    def __init__(self):
+    def __init__(self, bufsize: int = 10000, num_threads: int = 1):
         super().__init__()
+        self._bufsize = bufsize
+        self._num_threads = num_threads
+        self._buffer: deque = deque()
+        self._fns: List = []
+        self._fast_skip: bool = False
+        # Indicates position in the dataset.
+        self._cursor: int = -1
+        self._stop_iteration = False
+
         # Excludes these attributes from `self.state_dict()`
-        self._exclusions: List[str] = []
-
-    def cursor(self) -> int:
-        """Increases the cursor and returns the new value.
-
-        Returns:
-            A `int` indicates current position.
-        """
-        raise NotImplementedError
-
-    def reset_cursor(self) -> None:
-        """Reset cursor to enable re-iterating over the dataset.
-
-        """
-        raise NotImplementedError
-
-    def where(self, predicate: Callable[[Any], bool]):
-        """Filters a sample by predicate.
-
-        A predicate is a callable object that takes a sample as input and returns a
-        `bool` value to indicate whether this sample should be filtered out.
-
-        Note that the predicate is not applied to the dataset immediately. Instead, we
-        apply predicates to a large buffer and utilizes multi-threading pool to speed up data
-        pipeline.
-
-        Args:
-            predicate: A `Callable` object.
-
-        Returns:
-            `self`.
-        """
-        raise NotImplementedError
-
-    def select(self, fn: Callable[[Any], Any]):
-        """Transforms a sample.
-
-        A fn is a callable object that takes a sample as input and returns a transformed
-        sample.
-
-        Note that the transformation is not applied to the dataset immediately. Instead, we
-        apply transformations to a large buffer and utilizes multi-threading pool to speed up data
-        pipeline.
-
-        Args:
-            fn: A `Callable` object.
-
-        Returns:
-            `self`.
-
-        """
-        raise NotImplementedError
+        self._inclusions: List[str] = ['_inclusions', '_fast_skip', '_cursor', '_stop_iteration']
 
     def size(self) -> int:
         """Get size of this dataset.
 
         Note: The returned value represents the total number of samples of the dataset, without filters
-        applied to samples. When filters are applied, the effective size of this dataset may be different
-        the value returned by this method. So please make sure the filters are applied to the final dataset
+        applied to samples. When filters are applied, the effective size of dataset may be different
+        from the value returned by this method. So please make sure the filters are applied to the final dataset
         wrapper to avoid size inconsistency.
 
         For example, the following usage of `self.where()` filters would cause size inconsistency.
@@ -97,6 +56,7 @@ class BaseReader(Persistable):
             A scalar of type `int`.
 
         """
+
         raise NotImplementedError
 
     def next(self) -> Any:
@@ -108,7 +68,106 @@ class BaseReader(Persistable):
         """
         raise NotImplementedError
 
-    def buffered_next(self) -> Any:
+    def select(self, fn: Callable[[Any], Any]) -> BaseReader:
+        """Transforms a sample.
+
+        A fn is a callable object that takes a sample as input and returns a transformed
+        sample.
+
+        Note that the transformation is not applied to the dataset immediately. Instead, we
+        apply transformations to a large buffer and utilizes multi-threading pool to speed up data
+        pipeline.
+
+        Args:
+            fn: A `Callable` object.
+
+        Returns:
+            `self`.
+
+        """
+        self._fns.append(fn)
+        return self
+
+    def where(self, predicate: Callable[[Any], bool]) -> BaseReader:
+        """Filters a sample by predicate.
+
+        A predicate is a callable object that takes a sample as input and returns a
+        `bool` value to indicate whether this sample should be filtered out.
+
+        Note that the predicate is not applied to the dataset immediately. Instead, we
+        apply predicates to a large buffer and utilizes multi-threading pool to speed up data
+        pipeline.
+
+        Args:
+            predicate: A `Callable` object.
+
+        Returns:
+            `self`.
+        """
+        self._fns.append(predicate)
+        return self
+
+    def state_dict(self) -> Dict:
+        return get_state_dict(self, inclusions=self._inclusions)
+
+    def load_state_dict(self, state_dict: Dict) -> None:
+        self._buffer.clear()
+        load_state_dict(self, state_dict)
+
+        cursor = self._cursor
+        self._reset_cursor()
+        # Fast-skip these samples
+        is_fast_skip = self._fast_skip
+        self._fast_skip = True
+
+        while self._cursor < cursor:
+            self._move_cursor()
+            self._buffered_next()
+        self._fast_skip = is_fast_skip
+        if not is_fast_skip:
+            self._process_buffer()
+
+    def _move_cursor(self) -> int:
+        """Increases the cursor and returns the new value.
+
+        Returns:
+            A `int` indicates current position.
+        """
+        self._cursor += 1
+        return self._cursor
+
+    def _reset_cursor(self):
+        """Reset cursor to enable re-iterating over the dataset.
+
+        """
+        self._stop_iteration = False
+        self._cursor: int = -1
+
+    def _fill_buffer(self) -> int:
+        size = 0
+        if not self._stop_iteration:
+            buffer = self._buffer
+            for _ in range(self._bufsize - len(buffer)):
+                try:
+                    buffer.append(self.next())
+                except StopIteration:
+                    self._stop_iteration = True
+                    break
+            size = len(buffer)
+            if not self._fast_skip and size > 0:
+                self._process_buffer()
+        return size
+
+    def _process_buffer(self, buffer=None, inplace=True):
+        buffer = self._buffer if buffer is None else buffer
+        buffer = self._parallel_apply(buffer)
+        # buffer = list(filter(None, buffer))
+
+        if inplace:
+            self._buffer = deque(buffer)
+        return buffer
+
+    def _buffered_next(self) -> Any:
         """Wrapper method to get next sample.
 
         Wraps `self.next()`, apply transformations and predicates, and maintains
@@ -118,7 +177,13 @@ class BaseReader(Persistable):
             A sample of any type.
 
         """
-        raise NotImplementedError
+        try:
+            return self._buffer.popleft()
+        except IndexError:
+            size = self._fill_buffer()
+            if size == 0:
+                raise StopIteration
+            return self._buffer.popleft()
 
     def _apply(self, sample: Any) -> Any:
         """Applies transformations and filters to a sample.
@@ -131,128 +196,32 @@ class BaseReader(Persistable):
         Returns:
             A sample or `None` if it's filtered.
         """
-        raise NotImplementedError
-
-    def finalize(self):
-        """Release resources after iteration stops.
-
-        """
-        raise NotImplementedError
-
-    def __len__(self):
-        """Returns size of this dataset.
-
-        Returns:
-            A `int` scalar.
-        """
-        return self.size()
-
-    def __next__(self) -> Any:
-        """Implements iterator method and returns a sample.
-
-        Returns:
-            A sample instance.
-        """
-        raise NotImplementedError
-
-    def __iter__(self):
-        """Returns an iterator of this dataset.
-
-        """
-        self.reset_cursor()
-        return self
-
-    def load_state_dict(self, state_dict: Dict) -> None:
-        raise NotImplementedError
-
-    def state_dict(self):
-        raise NotImplementedError
-
-
-class Reader(BaseReader):
-    """Implements the functions defined in `BaseReader`.
-
-    """
-    __metaclass__ = abc.ABCMeta
-
-    def __init__(self, buffer_size: int = 10000, num_threads: int = 1):
-        super().__init__()
-        self._buffer_size = buffer_size
-        self._num_threads = num_threads
-        self._buffer: List = []
-        self._fns: List = []
-        self._fast_skip: bool = False
-        # Indicates position in the dataset.
-        self._cursor: int = -1
-        self._stop_iteration = False
-
-        self._exclusions += ['_fns', '_buffer']
-
-    @overrides
-    def size(self) -> int:
-        raise NotImplementedError
-
-    @overrides
-    def next(self) -> Any:
-        raise NotImplementedError
-
-    @overrides
-    def cursor(self) -> int:
-        self._cursor += 1
-        return self._cursor
-
-    @overrides
-    def reset_cursor(self):
-        self._stop_iteration = False
-        self._cursor: int = -1
-
-    def get_effective_buffer_size(self) -> int:
-        return len(self._buffer)
-
-    def process_buffer(self, buffer=None, inplace=True):
-        buffer = self._buffer if buffer is None else buffer
-        buffer = self._parallel_apply(buffer)
-        # buffer = list(filter(None, buffer))
-
-        if inplace:
-            self._buffer = buffer
-        return buffer
-
-    def _fill_buffer(self) -> int:
-        size = 0
-        if not self._stop_iteration:
-            buffer = self._buffer
-            while self.get_effective_buffer_size() < self._buffer_size:
-                try:
-                    buffer.append(self.next())
-                except StopIteration:
-                    self._stop_iteration = True
-                    break
-            size = len(buffer)
-            if not self._fast_skip and size > 0:
-                self.process_buffer()
-        return size
-
-    @overrides
-    def select(self, fn: Callable[[Any], Any]) -> BaseReader:
-        self._fns.append(fn)
-        return self
-
-    @overrides
-    def where(self, predicate: Callable[[Any], bool]) -> BaseReader:
-        self._fns.append(predicate)
-        return self
-
-    @overrides
-    def _apply(self, sample: Any) -> Any:
         if sample is None:
             return None
 
         for fn in self._fns:
-            if isinstance(sample, (tuple, list)):
+            new_sample = fn(sample)
+
+            # Stops when predicate is evaluated to False.
+            if new_sample is False:
+                return None
+            elif new_sample is not True:
+                sample = new_sample
+
+        return sample
+
+    def _star_apply(self, sample: Any) -> Any:
+        if sample is None:
+            return None
+
+        for fn in self._fns:
+            try:
                 new_sample = fn(*sample)
-            else:
-                new_sample = fn(sample)
+            except TypeError as e:
+                raise Exception(f'When a reader returns a tuple or list as a sample, '
+                                f'the mapping functions (`Reader.select()` and `Reader.where()`) '
+                                f'for succeeding readers should take equivalent number of parameters as args. '
+                                f'Please check the mapping functions for `{type(self)}`') from e
 
             # Stops when predicate is evaluated to False.
             if new_sample is False:
@@ -263,53 +232,33 @@ class Reader(BaseReader):
         return sample
 
     def _parallel_apply(self, samples: List[Any]) -> List[Any]:
-        if self._fns:
-            return parallel_map(self._apply, samples, self._num_threads)
+        if self._fns and samples:
+            if not isinstance(samples, (tuple, list)):
+                samples = list(samples)
+            if isinstance(samples[0], (tuple, list)):
+                return parallel_map(self._star_apply, samples, self._num_threads)
+            else:
+                return parallel_map(self._apply, samples, self._num_threads)
         else:
             return samples
 
-    @overrides
-    def buffered_next(self) -> Any:
-        if self.get_effective_buffer_size() == 0:
-            self._fill_buffer()
-        try:
-            return self._buffer.pop(0)
-        except IndexError:
-            raise StopIteration
+    def _finalize(self):
+        """Release resources after iteration stops.
 
-    @overrides
-    def state_dict(self) -> Dict:
-        return get_state_dict(self, exclusions=self._exclusions)
-
-    @overrides
-    def load_state_dict(self, state_dict: Dict) -> None:
-        self._buffer.clear()
-        load_state_dict(self, state_dict)
-
-        cursor = self._cursor
-        self.reset_cursor()
-        # Fast-skip these samples
-        is_fast_skip = self._fast_skip
-        self._fast_skip = True
-
-        while self._cursor < cursor:
-            self.cursor()
-            self.buffered_next()
-        self._fast_skip = is_fast_skip
-        if not is_fast_skip:
-            self.process_buffer()
-
-    @overrides
-    def finalize(self):
+        """
         pass
 
-    @overrides
-    def __next__(self) -> Any:
+    def __next__(self):
+        """Implements iterator method and returns a sample.
+
+        Returns:
+            A sample instance.
+        """
         try:
-            sample = self.buffered_next()
-            self.cursor()
+            sample = self._buffered_next()
+            self._move_cursor()
         except StopIteration as e:
-            self.finalize()
+            self._finalize()
             raise e
 
         if sample is None:
@@ -317,66 +266,16 @@ class Reader(BaseReader):
         return sample
 
     def __iter__(self) -> BaseReader:
-        return super().__iter__()
+        """Returns an iterator of this dataset.
 
+        """
+        self._reset_cursor()
+        return self
 
-class NestedReader(Reader):
-    def __init__(self, reader, buffer_size: int = 10000, num_threads: int = 1):
-        super().__init__(buffer_size, num_threads)
-        multi_reader = isinstance(reader, (list, tuple))
-        if not multi_reader:
-            reader = [reader]
-        for r in reader:
-            r._fast_skip = True
-        self.reader = reader
-        self._multi_reader = multi_reader
+    def __len__(self):
+        """Returns size of this dataset.
 
-    @overrides
-    def size(self) -> int:
-        return len(self.reader[0])
-
-    @overrides
-    def next(self) -> Any:
-        sample = tuple([r.buffered_next() for r in self.reader])
-        return sample if self._multi_reader else sample[0]
-
-    def finalize(self):
-        for reader in self.reader:
-            reader.finalize()
-        super().finalize()
-
-    @overrides
-    def process_buffer(self, buffer=None, inplace=True):
-        buffer = self._buffer if buffer is None else buffer
-        reader = self.reader
-        if self._multi_reader:
-            new_buffer = list(zip(
-                *[r.process_buffer(buf, inplace=False) for r, buf in
-                  zip(reader, itertools.zip_longest(*buffer))]))
-            new_buffer = list(map(
-                lambda sample: sample if all(s is not None for s in sample) else None,
-                new_buffer
-            ))
-        else:
-            new_buffer = reader[0].process_buffer(buffer, inplace=False)
-
-        return super().process_buffer(new_buffer, inplace)
-
-    @overrides
-    def __iter__(self):
-        self.reader = list(map(iter, self.reader))
-        return super().__iter__()
-
-    @overrides
-    def state_dict(self) -> Dict:
-        state = super().state_dict()
-        state['reader'] = [r.state_dict() for r in self.reader]
-        return state
-
-    @overrides
-    def load_state_dict(self, state_dict: Dict) -> None:
-        for r, state in zip(self.reader, state_dict['reader']):
-            r.load_state_dict(state)
-        del state_dict['reader']
-
-        super().load_state_dict(state_dict)
+        Returns:
+            A `int` scalar.
+        """
+        return self.size()
