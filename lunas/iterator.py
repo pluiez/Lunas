@@ -16,7 +16,9 @@ class Iterator(Persistable):
     the iteration state.
     """
 
-    def __init__(self, reader: BaseReader, batch_size, cache_size: int = 1000, sample_size_fn: Callable[[Any], int] = None,
+    def __init__(self, reader: BaseReader, batch_size, padded_size=None, cache_size: int = 1000,
+                 sample_size_fn: Callable[[Any], int] = None,
+                 padded_size_fn: Callable[[List[Any]], int] = None,
                  collate_fn: Callable[[List[Any]], Any] = None, sort_cache_by: Callable[[Any], int] = None,
                  sort_batch_by: Callable[[Any], int] = None,
                  drop_tails=False, strip_batch=False):
@@ -25,10 +27,12 @@ class Iterator(Persistable):
         Args:
             reader: A `Reader` object.
             batch_size: A `int` scalar that limits the size of returned batch.
+            padded_size: A `int` scalar that limits the size of resulting batch tensor.
             cache_size: A `int` scalar. Prefetch `cache_size` samples from the `reader` in `self.cache`.
             sample_size_fn: (Optional.) A callable function that calculates size for each sample.
                 The size of each sample will then be summed up as the size of the batch. If not
                 specified, default to 1 for each sample, which is equivalent to `lambda sample: 1`.
+            padded_size_fn: (Optional.) A callable function that returns the padded size given a set of samples.
             collate_fn: (Optional.) A callable function that converts a list of samples to model inputs.
             sort_cache_by: (Optional.) A callable function that returns a sorting key for each sample. If not
                 specified, leave the cache as it is. The samples will be sorted in ascending order.
@@ -39,17 +43,18 @@ class Iterator(Persistable):
         """
         super().__init__()
         self._reader = reader
+
         self._batch_size = batch_size
-        self._sample_size_fn = sample_size_fn
-        self._collate_fn = collate_fn
+        self._padded_size = padded_size
         self._cache_size = cache_size
+
+        self._sample_size_fn = sample_size_fn
+        self._padded_size_fn = padded_size_fn
+        self._collate_fn = collate_fn
         self._sort_cache_by = sort_cache_by
         self._sort_batch_by = sort_batch_by
         self._drop_tails = drop_tails
         self._strip_batch = strip_batch
-
-        self._sample_size_fn = sample_size_fn
-        self._collate_fn = collate_fn
 
         # bookkeeping params
         self._step_in_epoch = 0
@@ -145,7 +150,7 @@ class Iterator(Persistable):
             before_epoch()
 
         while True:
-            batch = Batch(self.batch_size, self._sample_size_fn)
+            batch = Batch(self.batch_size, self._sample_size_fn, self._padded_size, self._padded_size_fn)
             if cache.effective_size < self.batch_size * 2 / 3.0:
                 if end_of_epoch:
                     # Raise error when the whole dataset cannot form a batch
@@ -194,7 +199,7 @@ class Iterator(Persistable):
                 size_diff = batch.from_iter(cache, self.batch_size)
                 sort_batch = size_diff > 0 or sort_batch
 
-            if batch.effective_size < self.batch_size:
+            if not batch.filled:
                 # the cache is exhausted while batch is not filled
                 # for the last unfilled batch, revert it
                 if end_of_epoch:

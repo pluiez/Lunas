@@ -9,15 +9,29 @@ from lunas.utils import get_state_dict, load_state_dict
 
 
 class Batch(Persistable):
-    def __init__(self, max_size: int, size_fn: Callable[[Any], int] = None):
+    def __init__(self, max_size: int, size_fn: Callable[[Any], int] = None,
+                 max_padded_size: float = None, padded_size_fn: Callable[[List[Any]], int] = None):
+        """
+        A sizable data container for holding a batch of samples.
+        Args:
+            max_size: Maximum batch size.
+            size_fn: A callable function that returns the size of a given sample.
+            max_padded_size: (Optional.) Maximum size that consider paddings in the resulting tensor.
+            padded_size_fn: A callable function that returns the padded size of given samples.
+        """
         super().__init__()
         self._max_size = max_size
         self._size_fn = size_fn
+        self._max_padded_size = max_padded_size
+        self._padded_size_fn = padded_size_fn
+
         self._samples: deque = deque()
         self._effective_size: int = 0
         self._sort_idx: numpy.ndarray = None
         self._exclusions = ['_size_fn']
         self._data = None
+
+        self._filled = True
 
     @property
     def data(self):
@@ -34,6 +48,14 @@ class Batch(Persistable):
     @property
     def effective_size(self):
         return self._effective_size
+
+    @property
+    def filled(self):
+        return self._filled
+
+    @property
+    def num_samples(self):
+        return len(self._samples)
 
     def pop_all(self):
         samples = self.samples
@@ -78,10 +100,15 @@ class Batch(Persistable):
         size = size or self._max_size
         # Approximate
         init_size = self.effective_size
-        while self.effective_size < size:
+        self._filled = True
+        while self.effective_size < size and (
+                not self._max_padded_size or
+                self._padded_size_fn(self.samples) < self._max_padded_size
+        ):
             try:
                 self.push(next(sample_iter))
             except StopIteration as e:
+                self._filled = False
                 if raise_when_stopped:
                     raise e
                 else:
@@ -91,10 +118,15 @@ class Batch(Persistable):
     def from_deque(self, sample_list: deque, size: int = None):
         size = size or self._max_size
         init_size = self.effective_size
-        while self.effective_size < size:
+        self._filled = True
+        while self.effective_size < size and (
+                not self._max_padded_size or
+                self._padded_size_fn(self.samples) < self._max_padded_size
+        ):
             try:
                 self.push(sample_list.popleft())
             except IndexError:
+                self._filled = False
                 break
         return self.effective_size - init_size
 
@@ -113,22 +145,22 @@ class Batch(Persistable):
             indices = numpy.argsort(self._sort_idx)
             indices = list(indices)
 
-        arg_not_none=samples is not None
+        arg_not_none = samples is not None
 
         if samples is None:
-            samples=list(self._samples)
+            samples = list(self._samples)
         else:
             if len(samples) != len(self._sort_idx):
                 raise RuntimeError(
                     f'The number of samples ({len(samples)}) must match '
                     f'the number of indices ({len(self._sort_idx)}).'
                 )
-        samples=[samples[i] for i in indices]
+        samples = [samples[i] for i in indices]
 
         if arg_not_none:
             return samples
         else:
-            self._samples=deque(samples)
+            self._samples = deque(samples)
 
     def process(self, collate_fn):
         self._data = collate_fn(self.samples)
