@@ -3,9 +3,8 @@ from collections import deque
 from typing import List, Dict
 
 import numpy
-from overrides import overrides
-
 from lunas.readers.base import BaseReader
+from overrides import overrides
 
 
 class Nested(BaseReader):
@@ -138,3 +137,27 @@ class Zip(Nested):
                 f'Sizes of datasets {tuple(sizes)} must match.'
             )
         self._inclusions += ['reader']
+
+
+class Distributed(Nested):
+    def __init__(self, reader, world_size, rank):
+        assert world_size > 1 and rank >= 0 and world_size > rank, (world_size, rank)
+        bufsize = reader._bufsize
+        bufsize *= world_size
+        # mod = bufsize % world_size
+        # if mod > 0:
+        #     bufsize = bufsize - mod + world_size
+        super().__init__(reader, bufsize, reader._num_threads)
+        self.world_size = world_size
+        self.rank = rank
+        self._counter = rank
+        self._inclusions += ['world_size', 'rank', '_counter']
+
+    @overrides
+    def _fill_buffer(self):
+        super()._fill_buffer()
+        buffer = list(self._buffer)
+        buffer = buffer[self.rank:None:self.world_size]
+        size = len(buffer)
+        self._buffer = deque(buffer)
+        return size

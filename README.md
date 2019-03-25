@@ -1,15 +1,15 @@
 
 # Lunas
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.3.1-limegreen.svg)](https://github.com/pluiez/lunas)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.3.2-limegreen.svg)](https://github.com/pluiez/lunas)
 
 **Lunas** is a Python 3-based library that provides a set of simple interfaces for data processing pipelines and an iterator for looping through data.
 
 Basically, Lunas draws its data-handling style on *Tensorflow*, *PyTorch*, and some implementation details from *AllenNLP*.
 
-## Features
+## Overview
 
-`Reader` A reader defines a dataset and corresponding preprocessing and filtering rules. Currently the following features are supported:
+`Reader` defines a dataset and corresponding preprocessing and filtering pipelines. Currently the following features are supported:
 
 1. Buffered reading.
 2. Buffered shuffling.
@@ -18,12 +18,17 @@ Basically, Lunas draws its data-handling style on *Tensorflow*, *PyTorch*, and s
 5. Handling multiple input sources.
 6. Persistable.
 
-`Iterator` An iterator performs multi-pass iterations over the dataset and maintains the iteration state:
+`Iterator` performs arbitrary iterations over the dataset and maintains the iteration state:
 
 1. Dynamic batching at runtime.
 2. Custom stopping criteria.
 3. Sort samples of a batch, which is useful for learning text presentation by RNNs in *PyTorch*.
 4. Persistable.
+
+`GroupIterator` yields multiple batches at a time, 
+useful for simulated large batch training on limited computational resources.
+
+`Distributed` splits a reader for distributed training.
 
 *Persistable* provides the class with a *PyTorch* like interface to dump and load instance state, useful when the training process is accidentally aborted.
 

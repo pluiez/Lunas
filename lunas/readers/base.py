@@ -30,6 +30,7 @@ class BaseReader(Persistable):
         # Excludes these attributes from `self.state_dict()`
         self._inclusions: List[str] = ['_inclusions', '_fast_skip', '_cursor', '_stop_iteration']
 
+
     def size(self) -> int:
         """Get size of this dataset.
 
