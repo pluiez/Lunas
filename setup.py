@@ -10,7 +10,7 @@ with open('requirements.txt') as r:
 
 setup(
     name='Lunas',
-    version='0.3.2',
+    version='0.3.3',
     author='Seann Zhang',
     author_email='pluiefox@live.com',
     packages=find_packages(),

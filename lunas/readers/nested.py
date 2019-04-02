@@ -3,8 +3,10 @@ from collections import deque
 from typing import List, Dict
 
 import numpy
-from lunas.readers.base import BaseReader
 from overrides import overrides
+
+from lunas.readers.base import BaseReader
+from lunas.readers.range import Count
 
 
 class Nested(BaseReader):
@@ -129,14 +131,24 @@ class Shuffle(Nested):
 
 
 class Zip(Nested):
-    def __init__(self, reader: List[BaseReader], bufsize: int = 10000, num_threads: int = 1):
+    def __init__(self, reader: List[BaseReader], bufsize: int = 10000, num_threads: int = 1, strict=True):
         super().__init__(reader, bufsize, num_threads)
-        sizes = list(map(len, reader))
-        if len(set(sizes)) != 1:
-            raise RuntimeError(
-                f'Sizes of datasets {tuple(sizes)} must match.'
-            )
+        if strict:
+            sizes = list(map(len, reader))
+            if len(set(sizes)) != 1:
+                raise RuntimeError(
+                    f'Sizes of datasets {tuple(sizes)} must match.'
+                )
         self._inclusions += ['reader']
+
+
+class Enumerate(Zip):
+
+    def __init__(self, reader: BaseReader, start=0, step=1, bufsize: int = 10000, num_threads: int = 1):
+        if isinstance(reader, (tuple, list)) and len(reader) == 1:
+            reader = reader[0]
+        reader = [Count(start, step, bufsize, num_threads), reader]
+        super().__init__(reader, bufsize, num_threads, False)
 
 
 class Distributed(Nested):

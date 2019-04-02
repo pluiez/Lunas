@@ -1,7 +1,7 @@
 
 # Lunas
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.3.2-limegreen.svg)](https://github.com/pluiez/lunas)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.3.3-limegreen.svg)](https://github.com/pluiez/lunas)
 
 **Lunas** is a Python 3-based library that provides a set of simple interfaces for data processing pipelines and an iterator for looping through data.
 
@@ -30,7 +30,7 @@ useful for simulated large batch training on limited computational resources.
 
 `Distributed` splits a reader for distributed training.
 
-*Persistable* provides the class with a *PyTorch* like interface to dump and load instance state, useful when the training process is accidentally aborted.
+*Persistable* provides the class with a *PyTorch* compatible interface to dump and load instance state, useful when the training process is accidentally aborted.
 
 ## Requirements
 
