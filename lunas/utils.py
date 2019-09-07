@@ -1,36 +1,11 @@
 import itertools
-from multiprocessing.pool import ThreadPool
-from typing import Callable, Any, List
 
 
-def parallel_map(fn: Callable[[Any], Any], inputs: List[Any], num_thread: int):
-    """Applies a function to a list of inputs in parallel.
-
-    Uses a Threading pool to process inputs in parallel.
-
-    Args:
-        fn: A `Callable` function that takes an element from `inputs` as argument.
-        inputs: A `Iterable` object.
-        num_thread: An `int` scalar represents the number of threads.
-
-    Returns:
-        A corresponding list of processed inputs.
-    """
-    if num_thread <= 1:
-        return list(map(fn, inputs))
-    pool = ThreadPool(num_thread)
-    results = pool.map(fn, inputs)
-
-    pool.close()
-    pool.join()
-    return results
-
-
-def try_get_attr(instance, attr_name):
+def try_get_attr(instance, attr_name, value=None):
     if hasattr(instance, attr_name):
         return getattr(instance, attr_name)
     else:
-        return None
+        return value
 
 
 def get_state_dict(obj, recursive=True, exclusions=None, inclusions=None):
