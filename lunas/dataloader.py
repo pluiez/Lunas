@@ -1,4 +1,3 @@
-# from torch.utils.data.dataloader
 import threading
 
 import torch.multiprocessing as multiprocessing
@@ -50,12 +49,12 @@ from torch.utils.data._utils import signal_handling, MP_STATUS_CHECK_INTERVAL, \
 from torch.utils.data._utils.worker import ManagerWatchdog
 
 
-def _worker_loop(batch_iter, input_queue, output_queue, done_event, collate_fn, seed, init_fn, worker_id):
+def _worker_loop(input_queue, output_queue, done_event, collate_fn, seed, init_fn, worker_id):
     # See NOTE [ Data Loader Multiprocessing Shutdown Logic ] for details on the
     # logic of this function.
 
     try:
-        # Intialize C side signal handlers for SIGBUS and SIGSEGV. Python signal
+        # Initialize C side signal handlers for SIGBUS and SIGSEGV. Python signal
         # module's handlers are executed after Python returns from C low-level
         # handlers, likely when the same fatal signal had already happened
         # again.
@@ -105,6 +104,7 @@ def _worker_loop(batch_iter, input_queue, output_queue, done_event, collate_fn, 
 
 class _DataLoaderIter(object):
 
+    # noinspection PyArgumentList
     def __init__(self, loader):
         self.batch_iter = loader.batch_iter
         self.collate_fn = loader.collate_fn
@@ -133,7 +133,7 @@ class _DataLoaderIter(object):
                 input_queue.cancel_join_thread()
                 w = multiprocessing.Process(
                     target=_worker_loop,
-                    args=(self.batch_iter, input_queue,
+                    args=(input_queue,
                           self.worker_result_queue, self.done_event,
                           self.collate_fn, base_seed + i,
                           self.worker_init_fn, i))
@@ -184,7 +184,7 @@ class _DataLoaderIter(object):
         #   (bool: whether successfully get data, any: data if successful else None)
         try:
             data = self.data_queue.get(timeout=timeout)
-            return (True, data)
+            return True, data
         except Exception as e:
             # At timeout and error, we manually check whether any worker has
             # failed. Note that this is the only mechanism for Windows to detect
@@ -193,7 +193,7 @@ class _DataLoaderIter(object):
                 pids_str = ', '.join(str(w.pid) for w in self.workers if not w.is_alive())
                 raise RuntimeError('DataLoader worker (pid(s) {}) exited unexpectedly'.format(pids_str))
             if isinstance(e, queue.Empty):
-                return (False, None)
+                return False, None
             raise
 
     def _get_batch(self):

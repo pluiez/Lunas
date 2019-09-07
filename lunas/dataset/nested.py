@@ -17,7 +17,8 @@ class Nested(BaseDataset):
         self._next_fns = [{'next': d.__next__, 'buffered_next': d._buffered_next} for d in datasets]
         self._inclusions += ['datasets']
 
-    def _flatten(self, buffer):
+    @staticmethod
+    def _flatten(buffer):
         buffer = [x for (x,) in buffer]
         return buffer
 
@@ -51,22 +52,6 @@ class Nested(BaseDataset):
         del state_dict['datasets']
 
         super().load_state_dict(state_dict)
-
-    # @overrides
-    # def process(self, buffer=None):
-    #     buffer = self._buffer if buffer is None else buffer
-    #     zip_ = itertools.zip_longest
-    # processed individual buffers
-    # buffers = [d.process(buf) for d, buf in zip_(self.datasets, zip_(*buffer))]
-    #
-    # if len(self.datasets) == 1:
-    #     return super().process(buffers[0])
-    # else:
-    #     return super().process(zip_(*buffers))
-    # if len(self.datasets) == 1:
-    #     return super().process([x[0] for x in buffer])
-    # else:
-    #     return super().process(buffer)
 
     @overrides
     def initialize(self):

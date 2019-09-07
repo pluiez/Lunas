@@ -1,3 +1,3 @@
 from lunas.batch import Batch
-from lunas.iterator import Iterator
 from lunas.dataset import *
+from lunas.iterator import Iterator

@@ -41,5 +41,3 @@ class TextLine(BaseDataset):
             self._stream.close()
         self._stream = None
         super().finalize()
-
-

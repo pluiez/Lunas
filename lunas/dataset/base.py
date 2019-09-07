@@ -34,6 +34,8 @@ class BaseDataset(Persistable):
         self._initialized = False
         self._buffer_callbacks = []
 
+        self._enable_processing = True
+
         self._inclusions: List[str] = ['_inclusions', '_buf_ptr', '_buf_counter', '_random_state', '_bufsize']
 
     @property
