@@ -4,7 +4,7 @@ import abc
 import inspect
 import itertools
 import sys
-from typing import List, Callable, Any
+from typing import List, Callable, Any, Union, Tuple
 
 import numpy
 
@@ -21,6 +21,7 @@ class Dataset(abc.ABC):
         self._fns: List = []
         self._ptr = 0
         self._name = name
+        self._ref_count = 0
 
     @abc.abstractmethod
     def __len__(self):
@@ -30,22 +31,29 @@ class Dataset(abc.ABC):
     def generator(self):
         raise NotImplementedError
 
-    @property
-    def name(self):
-        return self.name
-
     def __iter__(self):
         ptr = self._ptr % len(self)
-        for self._ptr, x in enumerate(itertools.islice(self.generator(), ptr, len(self)), ptr + 1):
+        for self._ptr, x in enumerate(itertools.islice(self.generator(), ptr, None), ptr + 1):
             x = self._apply(x)
             if x is not None:
                 yield x
 
-    def state_dict(self):
+    @property
+    def name(self):
+        return self.name
+
+    def state_dict(self) -> dict:
         return {'ptr': self._ptr}
 
-    def load_state_dict(self, state):
+    def load_state_dict(self, state: dict) -> None:
         self._ptr = state['ptr']
+
+    def chk_and_inc_ref(self) -> None:
+        if self._ref_count > 0:
+            raise RuntimeError(f'Dataset `{self}` is only allowed to be wrapped in another dataset once, '
+                               'you should consider create a new instance instead.')
+        else:
+            self._ref_count += 1
 
     def select(self, fn: Callable[[Any], Any]) -> Dataset:
         """Transforms a sample lazily.
@@ -115,8 +123,8 @@ class Dataset(abc.ABC):
                 sample = new_sample
         return sample
 
-    def concat(self, other: Dataset) -> Concat:
-        return Concat(self, other)
+    def reset(self) -> None:
+        self._ptr = 0
 
     def repeat(self, n=None, name: str = None) -> Repeat:
         return Repeat(self, n, name)
@@ -134,56 +142,101 @@ class Dataset(abc.ABC):
     def sort(self, buffer_size: int, key: Callable[[Any], Any] = None, name: str = None) -> Sort:
         return Sort(self, buffer_size, key, name)
 
-    def take(self, n: int, name: str = None) -> Take:
-        return Take(self, n, name)
+    def slice(self, start=None, stop=None, name: str = None) -> Slice:
+        return Slice(self, start, stop, name)
 
-    def skip(self, n: int, name: str = None) -> Skip:
-        return Skip(self, n, name)
+    def take(self, n: int, name: str = None) -> Slice:
+        return Slice(self, None, n, name)
+
+    def skip(self, n: int, name: str = None) -> Slice:
+        return Slice(self, n, None, name)
 
     def window(self, size: int, shift: int = None, stride: int = 1,
                drop_tail: bool = False, name: str = None) -> Window:
         return Window(self, size, shift, stride, drop_tail, name)
 
 
-class Nested(Dataset):
+class NestedN(Dataset):
+
+    def __init__(self, datasets: Union[Tuple[Dataset], List[Dataset]], name: str = None):
+        super().__init__(name)
+        assert isinstance(datasets, (tuple, list)), type(datasets)
+        datasets = tuple(datasets)
+        assert all(map(lambda _: isinstance(_, Dataset),
+                       datasets)), f'datasets must subclass Dataset. ' \
+                                   f'Got: {tuple(map(lambda _: isinstance(_, Dataset), datasets))}'
+        for x in datasets:
+            x.chk_and_inc_ref()
+        self._datasets = datasets
+
+    @abc.abstractmethod
+    def __len__(self):
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def generator(self):
+        raise NotImplementedError
+
+    def __iter__(self):
+        self._ptr = self._ptr % len(self)
+        if self._ptr == 0:
+            self.reset()
+        for self._ptr, x in enumerate(self.generator(), self._ptr + 1):
+            x = self._apply(x)
+            if x is not None:
+                yield x
+
+    def state_dict(self) -> dict:
+        state = super().state_dict()
+        state.update({'datasets': [x.state_dict() for x in self._datasets]})
+        return state
+
+    def load_state_dict(self, state: dict) -> None:
+        super().load_state_dict(state)
+        for x, state in zip(self._datasets, state['datasets']):
+            x.load_state_dict(state)
+
+    def reset(self) -> None:
+        super().reset()
+        for x in self._datasets:
+            x.reset()
+
+
+class Nested(NestedN):
 
     def __init__(self, dataset: Dataset, name: str = None):
-        super().__init__(name)
-        assert isinstance(dataset, Dataset)
+        super().__init__([dataset], name)
         self._dataset = dataset
+
+    @abc.abstractmethod
+    def generator(self):
+        raise NotImplementedError
 
     def __len__(self):
         return len(self._dataset)
-
-    def generator(self):
-        raise NotImplementedError
 
 
 class Repeat(Nested):
 
     def __init__(self, dataset: Dataset, n: int = None, name: str = None):
         super().__init__(dataset, name)
-        assert n is None or n > 0
+        assert n is None or (n > 0 and isinstance(n, int))
         self._n = n
 
     def __len__(self):
         return len(self._dataset) * self._n if self._n is not None else sys.maxsize
 
-    def load_state_dict(self, state):
-        self._ptr = state['ptr'] % len(self._dataset)
-
     def generator(self):
-        for _ in itertools.repeat(None, self._n) if self._n else itertools.repeat(None):
-            for x in self._dataset:
-                yield x
+        repeats = itertools.repeat(self._dataset, self._n) if self._n else itertools.repeat(self._dataset)
+        for x in itertools.chain.from_iterable(repeats):
+            yield x
 
 
 class InterleaveDataset(Nested):
 
     def __init__(self, dataset: Dataset, map_fn: Callable[[Any], Dataset], cycle_length: int, block_length: int,
                  name: str = None):
-        dataset.select(lambda x: iter(map_fn(x)))
-        super().__init__(dataset, name)
+        super().__init__(dataset.select(lambda x: iter(map_fn(x))), name)
         assert callable(map_fn)
         assert cycle_length > 0
         assert block_length > 0
@@ -192,15 +245,15 @@ class InterleaveDataset(Nested):
 
     def generator(self):
         it = iter(self._dataset)
-        xs = [iter(x) for x in itertools.islice(it, self._cycle_length)]
+        xs = [x for x in itertools.islice(it, self._cycle_length)]
         i = 0
         cycle_length = len(xs)
         while cycle_length > 0:
-            j = i % cycle_length
-            x = xs[j]
+            i = i % cycle_length
+            x = xs[i]
             items = list(itertools.islice(x, self._block_length))
             if not items:
-                xs.pop(j)
+                xs.pop(i)
                 try:
                     xs.append(next(it))
                 except StopIteration:
@@ -209,46 +262,7 @@ class InterleaveDataset(Nested):
             else:
                 for item in items:
                     yield item
-                i = j + 1
-
-
-class Concat(Dataset):
-
-    def __init__(self, a: Dataset, b: Dataset, name: str = None):
-        super().__init__(name)
-        assert isinstance(a, Dataset)
-        assert isinstance(b, Dataset)
-        self._datasets = (a, b)
-
-    def __len__(self):
-        return sum(map(len, self._datasets))
-
-    def generator(self):
-        for x in itertools.chain(*self._datasets):
-            yield x
-
-
-class Shard(Nested):
-    def __init__(self, dataset: Dataset, num_shards: int, index: int, name: str = None):
-        super().__init__(dataset, name)
-        assert num_shards > 1
-        assert index > -1
-        assert index < num_shards
-        shard_size, remain = divmod(len(dataset), num_shards)
-        shard_sizes = [shard_size] * num_shards
-        for i in range(0, min(index + 1, remain)):
-            shard_sizes[i] += 1
-        boundaries = [0] + list(itertools.accumulate(shard_sizes, lambda a, b: a + b)) + [len(dataset)]
-        start, stop = boundaries[index], boundaries[index + 1]
-        self._start = start
-        self._stop = stop
-
-    def __len__(self):
-        return self._stop - self._start
-
-    def generator(self):
-        for x in itertools.islice(self._dataset, self._start, self._stop):
-            yield x
+                i += 1
 
 
 class Shuffle(Nested):
@@ -261,13 +275,13 @@ class Shuffle(Nested):
         it = iter(self._dataset)
         size = min(self._buffer_size, len(self._dataset))
         buffer = list(itertools.islice(it, size))
-        indices = iter(numpy.random.randint(0, size, size))
+        indices = numpy.nditer(numpy.random.randint(0, size, size))
 
         for x in it:
             try:
                 i = next(indices)
             except StopIteration:
-                indices = iter(numpy.random.randint(0, size, size))
+                indices = numpy.nditer(numpy.random.randint(0, size, size))
                 i = next(indices)
             yield buffer[i]
             buffer[i] = x
@@ -301,32 +315,70 @@ class Sort(Nested):
                 break
 
 
-class Take(Nested):
-    def __init__(self, dataset: Dataset, n: int, name: str = None):
+class Slice(Nested):
+
+    def __init__(self, dataset: Dataset, start: int = None, stop: int = None, name: str = None):
         super().__init__(dataset, name)
-        assert n > 0
-        self._n = n
+        assert not (start is None and stop is None)
+
+        if start is None:
+            assert stop > 0
+            size = min(stop, len(dataset))
+        else:
+            assert start > -1
+            if stop is None:
+                size = len(dataset) - start
+            else:
+                size = min(stop, len(dataset)) - start
+            assert size > 0, size
+        self._skipped = False
+        self._size = size
+        self._start = start
+        self._stop = stop
 
     def __len__(self):
-        return self._n
+        return self._size
 
     def generator(self):
-        for x in itertools.islice(iter(self._dataset), self._n):
+        if self._start is None:
+            it = itertools.islice(self._dataset, self._stop)
+        else:
+            # ONLY itertools.islice(iterable, stop) is capable of preserving iteration state.
+            # it = itertools.islice(self._dataset, self._start, self._stop)
+            if not self._skipped:
+                for _ in itertools.islice(self._dataset, self._start):
+                    ...
+                self._skipped = True
+            it = itertools.islice(self._dataset, len(self) - self._ptr)
+        for x in it:
             yield x
 
+    def state_dict(self) -> dict:
+        state = super().state_dict()
+        state.update({'skipped': self._skipped})
+        return state
 
-class Skip(Dataset):
-    def __init__(self, dataset: Dataset, n: int, name: str = None):
-        super().__init__(name)
-        assert n > -1
-        self._n = n
+    def load_state_dict(self, state: dict) -> None:
+        super().load_state_dict(state)
+        self._skipped = state['skipped']
 
-    def __len__(self):
-        return max(len(self._dataset) - self._n, 0)
+    def reset(self) -> None:
+        super().reset()
+        self._skipped = False
 
-    def generator(self):
-        for x in itertools.islice(iter(self._dataset), self._n, len(self._dataset)):
-            yield x
+
+class Shard(Slice):
+    def __init__(self, dataset: Dataset, num_shards: int, index: int, name: str = None):
+        assert num_shards > 1
+        assert index > -1
+        assert index < num_shards
+        shard_size, remain = divmod(len(dataset), num_shards)
+        shard_sizes = [shard_size] * num_shards
+        for i in range(0, min(index + 1, remain)):
+            shard_sizes[i] += 1
+        boundaries = [0] + list(itertools.accumulate(shard_sizes, lambda a, b: a + b)) + [len(dataset)]
+        start, stop = boundaries[index], boundaries[index + 1]
+        super().__init__(dataset, start, stop, name)
 
 
 class Window(Nested):

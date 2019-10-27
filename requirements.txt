@@ -1,4 +1,3 @@
-overrides
-setuptools
-numpy
-typing
+setuptools==41.2.0
+typing==3.6.6
+numpy==1.16.2

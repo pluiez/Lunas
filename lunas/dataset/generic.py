@@ -5,18 +5,18 @@ import itertools
 import math
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterable, Union
+from typing import Iterable, Union, Tuple, List
 
 import numpy
 
-from .generic import Dataset, Nested
+from .core import Dataset, Nested, NestedN
 
 
 class Array(Dataset):
 
     def __init__(self, data: Union[numpy.ndarray, Iterable, Iterator], name: str = None):
         super().__init__(name)
-
+        assert not isinstance(data, Dataset)
         if not isinstance(data, numpy.ndarray) and isinstance(data, Iterator):
             data = list(data)
         self._data = data
@@ -58,7 +58,7 @@ class Range(Dataset):
 class Enumerate(Nested):
 
     def __init__(self, dataset: Dataset, start: int = 0, name: str = None):
-        super().__init__(name)
+        super().__init__(dataset, name)
         self._start = start
 
     def __len__(self):
@@ -69,9 +69,10 @@ class Enumerate(Nested):
             yield x
 
 
-class Zip(Dataset):
+class Zip(NestedN):
 
-    def __init__(self, datasets: Iterable[Dataset], mode: str = '=', padding: bool = False, name: str = None):
+    def __init__(self, datasets: Union[Tuple[Dataset], List[Dataset]], mode: str = '=', padding: bool = False,
+                 name: str = None):
         """
         Zip multiple datasets, potentially with different sizes.
         :param datasets:
@@ -83,15 +84,11 @@ class Zip(Dataset):
             A False will use None as padding, just like itertools.zip_longest. A True value will reiterate over
             the shorter dataset to produce element instead of None padding. Only works when mode is '>'.
         """
-        super().__init__(name)
-        assert isinstance(datasets, (tuple, list))
-        datasets = tuple(datasets)
-        assert all(map(lambda x: isinstance(x, Dataset), datasets)), 'datasets must subclass Dataset.'
-
+        super().__init__(datasets, name)
         sizes = tuple(map(len, datasets))
         if mode == '=':
             if len(set(sizes)) > 1:
-                raise RuntimeError(f'Datasets must have exactly the same sizes. Got sizes: {tuple(sizes)}')
+                raise RuntimeError(f'Datasets must have exactly the same sizes. Got: {tuple(sizes)}')
             size = sizes[0]
         elif mode == '<':
             size = min(sizes)
@@ -101,8 +98,8 @@ class Zip(Dataset):
             raise NotImplementedError(f'Unknown mode:{mode}')
 
         self._size = size
+        self._sizes = sizes
 
-        self._datasets = datasets
         self._mode = mode
         self._padding = padding
 
@@ -114,12 +111,34 @@ class Zip(Dataset):
             for x in zip(*self._datasets):
                 yield x
         else:
-            it = itertools.zip_longest(*self._datasets)
-            if self._padding:
-                datasets = [dataset if len(dataset) == len(self) else dataset.repeat() for dataset in self._datasets]
-                it = zip(*datasets)
-            for x in it:
-                yield x
+            if not self._padding:
+                it = itertools.zip_longest(*self._datasets)
+                for x in it:
+                    yield x
+            else:
+                # DO NOT USE itertools.cycle EVER!
+                # Since itertools.cycle actually stores all elements after one-time iteration,
+                # this is super-memory-consuming and breaks the internal state maintenance of a `Dataset`.
+                datasets = [itertools.chain.from_iterable(itertools.repeat(d))
+                            if len(d) < len(self) else d
+                            for d in self._datasets]
+                # Additionally islice is used here. zip will stop when one iterator raises StopIteration,
+                # so any datasets before it will unexpectedly advance one element.
+                for x in itertools.islice(zip(*datasets), len(self)):
+                    yield x
+
+
+class Concat(NestedN):
+
+    def __init__(self, a: Dataset, b: Dataset, name: str = None):
+        super().__init__([a, b], name)
+
+    def __len__(self):
+        return sum(map(len, self._datasets))
+
+    def generator(self):
+        for x in itertools.chain(*self._datasets):
+            yield x
 
 
 class Glob(Dataset):
@@ -127,11 +146,11 @@ class Glob(Dataset):
     def __init__(self, pattern: str, recursive: bool = False, expand_user: bool = False, name: str = None):
         super().__init__(name)
         pattern = str(Path(pattern).expanduser() if expand_user else Path(pattern))
-        self.files = sorted(glob.glob(pattern, recursive=recursive))
+        self._files = sorted(glob.glob(pattern, recursive=recursive))
 
     def __len__(self):
-        return len(self.files)
+        return len(self._files)
 
     def generator(self):
-        for x in self.files:
+        for x in self._files:
             yield x

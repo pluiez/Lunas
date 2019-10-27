@@ -1,164 +1,196 @@
-from typing import List, Dict, Callable, Any
+import abc
+import bisect
+import itertools
+from collections import deque
+from typing import Callable, Any, List, Iterator, Iterable
 
-from overrides import overrides
+from lunas.dataset.core import Dataset
 
-from lunas.batch import Batch
-from lunas.dataset.base import BaseDataset
-from lunas.persistable import Persistable
-from lunas.utils import get_state_dict, load_state_dict
+__all__ = ['SimpleIterator', 'BucketIterator']
 
 
-class Iterator(Persistable):
-    """An iterator that iterates through a `Reader`.
+class BatchIterator(abc.ABC):
 
-    This class performs multi-pass iterations over the dataset and maintains
-    the iteration state.
-    """
-
-    def __init__(self, dataset: BaseDataset, batch_size,
-                 sample_size_fn: Callable[[Any], int] = None,
-                 collate_fn: Callable[[List[Any]], Any] = None,
-                 dist_world_size=1,
-                 dist_local_rank=0,
-                 drop_tail=False):
-        """Initialize the iterator.
-
-        Args:
-            dataset: A `Reader` object.
-            batch_size: A `int` scalar that limits the size of returned batch.
-            sample_size_fn: (Optional.) A callable function that calculates size for each sample.
-                The size of each sample will then be summed up as the size of the batch. If not
-                specified, default to 1 for each sample, which is equivalent to `lambda sample: 1`.
-            collate_fn: (Optional.) A callable function that converts a list of samples to model inputs.
-            drop_tail: (Optional.) Whether the last samples of the dataset that cannot fill a batch should be dropped.
-        """
-        super().__init__()
-        # bookkeeping params
-        self._step_in_epoch = 0
-        self._step = 0
-        self._epoch = 0
-
+    def __init__(self, dataset: Dataset, batch_size: int, drop_tail=False) -> None:
+        assert isinstance(dataset, Dataset)
         self._dataset = dataset
-
         self._batch_size = batch_size
-
-        self._sample_size_fn = sample_size_fn
-        self._collate_fn = collate_fn
-
-        self._dist_world_size = dist_world_size
-        self._dist_local_rank = dist_local_rank
-
         self._drop_tail = drop_tail
 
-        self._inclusions = ['_inclusions', '_step', '_step_in_epoch', '_epoch', '_dataset']
+    @abc.abstractmethod
+    def generator(self) -> Iterator:
+        raise NotImplementedError
 
-        self.initialize()
+    def state_dict(self):
+        return self._dataset.state_dict()
 
-    @property
-    def step_in_epoch(self):
-        return self._step_in_epoch
+    def load_state_dict(self, state):
+        self._dataset.load_state_dict(state)
 
-    @property
-    def step(self):
-        return self._step
+    def __iter__(self):
+        num_workers = 1
+        worker_id = 0
 
-    @property
-    def epoch(self):
-        return self._epoch
+        try:
+            import torch
+            worker_info = torch.utils.data.get_worker_info()
+            if worker_info is not None:
+                num_workers = worker_info.num_workers
+                worker_id = worker_info.id
+        except ImportError:
+            ...
 
-    @property
-    def batch_size(self):
-        return self._batch_size
+        i = 0
+        for samples in self.generator():
+            if i == worker_id:
+                yield samples
+            i = (i + 1) % num_workers
 
-    def set_batch_size(self, batch_size) -> None:
-        """Allows dynamic batch size at runtime.
 
-        Args:
-            batch_size: A `int` scalar.
+class Queue(object):
 
-        """
-        self._batch_size = batch_size
+    def __init__(self) -> None:
+        self._queue = deque()
 
-    def iter_epoch(self, before_epoch=None, after_epoch=None):
-        """Iterate through the dataset for one epoch.
+    def qsize(self):
+        return len(self._queue)
 
-        For the last batch, it will be dropped if its size is smaller
-        than 2/3 of the specified batch size.
+    def empty(self):
+        return len(self._queue) == 0
 
-        """
-        if before_epoch is not None and self.step_in_epoch == 0:
-            before_epoch()
+    def put(self, x):
+        self._queue.append(x)
 
-        batch = Batch(self.batch_size, self._sample_size_fn)
+    def get(self):
+        return self._queue.popleft()
+
+    def gets(self, n=None):
+        n = n if n is not None else self.qsize()
+        return [self.get() for _ in range(n)]
+
+
+class DataLoader(abc.ABC):
+    @abc.abstractmethod
+    def __init__(self, iterator: BatchIterator, num_workers: int = 0, collate_fn: Callable[[Iterable[Any]], Any] = None,
+                 pin_memory: bool = False, timeout: int = 0, worker_init_fn: Callable[[None], None] = None,
+                 multiprocessing_context=None): ...
+
+
+try:
+    from torch.utils.data.dataset import IterableDataset as _THIterableDataset
+    from torch.utils.data.dataloader import DataLoader as _THDataLoader
+
+
+    class _WrappedTHIterableDataset(BatchIterator, _THIterableDataset):
+        ...
+
+
+    class _WrappedTHDataLoader(DataLoader, _THDataLoader):
+        # noinspection PyArgumentList
+        def __init__(self, iterator: BatchIterator, num_workers: int = 0,
+                     collate_fn: Callable[[Iterable[Any]], Any] = None,
+                     pin_memory: bool = False, timeout: int = 0, worker_init_fn: Callable[[None], None] = None,
+                     multiprocessing_context=None):
+            _THDataLoader.__init__(self, iterator, batch_size=None, shuffle=False, sampler=None,
+                                   batch_sampler=None, num_workers=num_workers, collate_fn=collate_fn,
+                                   pin_memory=pin_memory, drop_last=False, timeout=timeout,
+                                   worker_init_fn=worker_init_fn, multiprocessing_context=multiprocessing_context)
+            self._lunas_iterator = iterator  # add additional reference simply for state persistence
+
+        def state_dict(self):
+            return self._lunas_iterator.state_dict()
+
+        def load_state_dict(self, state):
+            self._lunas_iterator.load_state_dict(state)
+
+        def __iter__(self):
+            return super().__iter__()
+
+
+    BatchIterator = _WrappedTHIterableDataset
+    DataLoader = _WrappedTHDataLoader
+except ImportError:
+    ...
+
+
+class SimpleIterator(BatchIterator):
+    def __init__(self, dataset: Dataset, batch_size: int, drop_tail: bool = False) -> None:
+        super().__init__(dataset, batch_size, drop_tail)
+
+    def generator(self):
+        it = iter(self._dataset)
+
         while True:
-            try:
-                while batch.add(next(self._dataset)):
-                    pass
-            except StopIteration:
-                break
+            samples = list(itertools.islice(it, self._batch_size))
+            if len(samples) == self._batch_size:
+                yield samples
             else:
+                if not self._drop_tail and samples:
+                    yield samples
+                break
 
-                if self._step % self._dist_world_size == self._dist_local_rank:
-                    yield batch
-                else:
-                    del batch
-                batch = Batch(self.batch_size, self._sample_size_fn)
-                self._step += 1
-                self._step_in_epoch += 1
 
-        if not self._drop_tail and batch.num_samples > 0:
-            yield batch
-            self._step += 1
-            self._step_in_epoch += 1
-
-        if after_epoch is not None:
-            after_epoch()
-
-        self._epoch += 1
-        self._step_in_epoch = 0
-
-    def initialize(self):
-        self._step_in_epoch = 0
-        self._step = 0
-        self._epoch = 0
-        self._dataset = iter(self._dataset)
-
-    def while_true(self, predicate: Callable[[], bool], before_epoch=None, after_epoch=None):
-        """Iterates through the dataset by a given stopping criteria.
-
-        Args:
-            predicate: A callable function. This function is evaluated to determine
-            whether iteration should continue or not.
-            before_epoch:
-            after_epoch:
-
-        Returns:
-            (batch, inputs): A `Tuple` consists of a `Batch` object and model inputs. When `self.collate_fn`
-                is None, the returned `inputs` is also None.
+class BucketIterator(BatchIterator):
+    def __init__(self, dataset: Dataset, batch_size: int,
+                 sample_size_fn: Callable[[Any], int],
+                 bucket_boundaries: List[int],
+                 max_sample_size: int,
+                 drop_tail: bool = False) -> None:
         """
-        epoch_iter = self.iter_epoch(before_epoch, after_epoch)
+        Arrange samples into different buckets determined by their size. This is useful for maximize the utilization
+        of computation during a training step.
+        :param dataset
+        :param batch_size:
+        :param sample_size_fn: a callable function, which evaluates the size of a given sample
+        :param bucket_boundaries: a list of ints that defines the buckets' and accordingly their capacities. Should be
+            sorted in ascending order
+        :param max_sample_size: an optional integer. Samples with size exceeding this value will be discarded
+        :param drop_tail:
+        """
+        super().__init__(dataset, batch_size, drop_tail)
+        assert bucket_boundaries, 'bucket_boundaries should have at least one element'
+        assert bucket_boundaries == sorted(bucket_boundaries), 'bucket_boundaries should be in ascending order'
+        assert len(set(bucket_boundaries)) == len(bucket_boundaries), \
+            'bucket_boundaries shall not contain duplicate elements'
+        assert max_sample_size >= bucket_boundaries[
+            -1], 'max_sample_size shall not be less than the last boundary of bucket_boundaries'
+        assert callable(sample_size_fn), 'sample_size_fn should be a callable function'
 
-        if predicate is not None:
-            while predicate():
-                try:
-                    batch = next(epoch_iter)
-                except StopIteration:
-                    self._dataset = iter(self._dataset)
-                    epoch_iter = self.iter_epoch(before_epoch, after_epoch)
-                    continue
+        if max_sample_size > bucket_boundaries[-1]:
+            bucket_boundaries.append(max_sample_size)
 
-                yield batch
-        else:
-            for batch in epoch_iter:
-                yield batch
+        self._sample_size_fn = sample_size_fn
+        self._bucket_boundaries = bucket_boundaries
+        self._max_sample_size = max_sample_size
 
-    @overrides
-    def state_dict(self) -> Dict:
-        return get_state_dict(self, recursive=True, inclusions=self._inclusions)
+    def generator(self):
+        boundaries = self._bucket_boundaries
 
-    @overrides
-    def load_state_dict(self, state_dict: Dict) -> None:
-        load_state_dict(self, state_dict)
+        buckets = [Queue() for _ in boundaries]
+        batch_sizes = [max(1, self._batch_size // b) for b in boundaries]
 
-    def __call__(self, while_predicate: Callable[[], bool] = None, before_epoch=None, after_epoch=None):
-        return self.while_true(while_predicate, before_epoch, after_epoch)
+        num_bucket = len(buckets)
+
+        sample_size_fn = self._sample_size_fn
+
+        for x in self._dataset:
+            size = sample_size_fn(x)
+            i = bisect.bisect_left(boundaries, size)
+
+            if i >= num_bucket:  # drop sample with size exceeding the max boundary
+                continue
+
+            buckets[i].put(x)
+            if buckets[i].qsize() == batch_sizes[i]:
+                yield i, buckets[i].gets(batch_sizes[i])
+
+        if not self._drop_tail:
+            final_queue = Queue()
+            for q, size in zip(buckets, batch_sizes):
+                while not q.empty():
+                    final_queue.put(q.get())
+                    if final_queue.qsize() >= size:
+                        yield final_queue.gets(2 * size - final_queue.qsize())
+
+            if not final_queue.empty():
+                yield final_queue.gets()
