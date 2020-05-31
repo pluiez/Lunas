@@ -1,39 +1,42 @@
 from __future__ import annotations
 
+import collections.abc
 import glob
 import itertools
 import math
-from collections.abc import Iterator
-from pathlib import Path
-from typing import Iterable, Union, Tuple, List
+import pathlib
+from typing import Union, Tuple, List
 
-import numpy
+import lunas.dataset.core as core
 
-from .core import Dataset, Nested, NestedN
+__all__ = ['Array', 'Range', 'Enumerate', 'Zip', 'Concat', 'Glob']
 
 
-class Array(Dataset):
+class Array(core.Dataset):
+    """A dataset that wraps around any sequential data.
 
-    def __init__(self, data: Union[numpy.ndarray, Iterable, Iterator], name: str = None):
+    Array dataset accepts any iterable data. Note that the iterable data will be stored into a list immediately during
+    initialisation.
+    """
+
+    def __init__(self, data: collections.abc.Iterable, name: str = None):
         super().__init__(name)
-        assert not isinstance(data, Dataset)
-        if not isinstance(data, numpy.ndarray) and isinstance(data, Iterator):
-            data = list(data)
-        self._data = data
+        self._data = list(data)
 
     def __len__(self):
         return len(self._data)
 
     def generator(self):
-        if isinstance(self._data, numpy.ndarray):
-            it = numpy.nditer(self._data)
-        else:
-            it = iter(self._data)
-        for x in it:
+        for x in self._data:
             yield x
 
 
-class Range(Dataset):
+class Range(core.Dataset):
+    """Range dataset.
+
+    Simulates the builtin range function.
+    """
+
     def __init__(self, start: int, stop: int = None, step: int = None, name: str = None):
         super().__init__(name)
         if stop is None:
@@ -55,9 +58,13 @@ class Range(Dataset):
             yield x
 
 
-class Enumerate(Nested):
+class Enumerate(core.Nested):
+    """Enumerate a dataset.
 
-    def __init__(self, dataset: Dataset, start: int = 0, name: str = None):
+    Simulates the builtin enumerate function and attach an index to each element in the given dataset.
+    """
+
+    def __init__(self, dataset: core.Dataset, start: int = 0, name: str = None):
         super().__init__(dataset, name)
         self._start = start
 
@@ -69,20 +76,28 @@ class Enumerate(Nested):
             yield x
 
 
-class Zip(NestedN):
+class Zip(core.NestedN):
+    """Zips multiple dataset.
 
-    def __init__(self, datasets: Union[Tuple[Dataset], List[Dataset]], mode: str = '=', padding: bool = False,
+    Zips multiple datasets, potentially with different sizes.
+    """
+
+    def __init__(self, datasets: Union[Tuple[core.Dataset], List[core.Dataset]], mode: str = '=', padding: bool = False,
                  name: str = None):
-        """
-        Zip multiple datasets, potentially with different sizes.
-        :param datasets:
-        :param name:
-        :param mode: a character, available options include '=' '<' and '>'. '=' requires the datasets to have the
-            same sizes; '<' behaves similarly to the builtin zip, which strip according to the shortest dataset;
-            '>' is similar to itertools.zip_longest.
-        :param padding: a boolean value that determines how to pad the shorter datasets when they are exhausted.
-            A False will use None as padding, just like itertools.zip_longest. A True value will reiterate over
-            the shorter dataset to produce element instead of None padding. Only works when mode is '>'.
+        """Initialises the dataset.
+
+        Args:
+            datasets: The dataset objects to zip.
+            mode: A character, available options include '=' '<' and '>'.
+                '=' requires the datasets to have the same sizes;
+                '<' behaves similarly to the builtin `zip`, which truncate the bigger datasets to align with the
+                smallest one;
+                '>' is similar to `itertools.zip_longest`, fill the smaller datasets with strategy specified by
+                `padding`.
+            padding: A boolean value that determines how to pad the small datasets when they are exhausted.
+                A `False` will produce `None` as padding, while `True` will continue producing elements from smaller
+                datasets. Only works when mode is '>'.
+            name: Name of the dataset.
         """
         super().__init__(datasets, name)
         sizes = tuple(map(len, datasets))
@@ -95,8 +110,10 @@ class Zip(NestedN):
         elif mode == '>':
             size = max(sizes)
         else:
-            raise NotImplementedError(f'Unknown mode:{mode}')
+            raise ValueError(f'Unknown mode: {mode}')
 
+        if not isinstance(padding, bool):
+            raise ValueError(f'Expected padding as a bool value, got {padding}')
         self._size = size
         self._sizes = sizes
 
@@ -128,9 +145,13 @@ class Zip(NestedN):
                     yield x
 
 
-class Concat(NestedN):
+class Concat(core.NestedN):
+    """Concat dataset.
 
-    def __init__(self, a: Dataset, b: Dataset, name: str = None):
+    Concatenates two datasets.
+    """
+
+    def __init__(self, a: core.Dataset, b: core.Dataset, name: str = None):
         super().__init__([a, b], name)
 
     def __len__(self):
@@ -141,11 +162,23 @@ class Concat(NestedN):
             yield x
 
 
-class Glob(Dataset):
+class Glob(core.Dataset):
+    """Glob dataset.
+
+    Use standard glob module to wrap matched directories/files for given pattern into a dataset.
+    """
 
     def __init__(self, pattern: str, recursive: bool = False, expand_user: bool = False, name: str = None):
+        """Initialises the dataset.
+
+        Args:
+            pattern: A glob patter.
+            recursive: Whether matches recursively.
+            expand_user: Whether expands the user home path.
+            name: Name of the dataset.
+        """
         super().__init__(name)
-        pattern = str(Path(pattern).expanduser() if expand_user else Path(pattern))
+        pattern = str(pathlib.Path(pattern).expanduser() if expand_user else pathlib.Path(pattern))
         self._files = sorted(glob.glob(pattern, recursive=recursive))
 
     def __len__(self):

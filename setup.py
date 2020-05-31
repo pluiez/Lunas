@@ -10,12 +10,12 @@ with open('requirements.txt') as r:
 
 setup(
     name='Lunas',
-    version='0.3.7',
+    version='0.3.8',
     author='Seann Zhang',
     author_email='pluiefox@live.com',
     packages=find_packages(),
     url='https://github.com/pluiez/lunas',
-    license='LICENSE.txt',
+    license='LICENSE',
     description='A data processing pipeline and iterator '
                 'for machine learning.',
     long_description=open('README.md').read(),
