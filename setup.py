@@ -16,8 +16,7 @@ setup(
     packages=find_packages(),
     url='https://github.com/pluiez/lunas',
     license='LICENSE',
-    description='A data processing pipeline and iterator '
-                'for machine learning.',
+    description='Building customisable data processing pipeline and data iterators for machine learning.',
     long_description=open('README.md').read(),
     long_description_content_type="text/markdown",
     install_requires=requires,
