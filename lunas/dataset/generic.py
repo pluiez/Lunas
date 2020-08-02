@@ -168,7 +168,7 @@ class Glob(core.Dataset):
     Use standard glob module to wrap matched directories/files for given pattern into a dataset.
     """
 
-    def __init__(self, pattern: str, recursive: bool = False, expand_user: bool = False, name: str = None):
+    def __init__(self, pattern: str, recursive: bool = False, expand_user: bool = True, name: str = None):
         """Initialises the dataset.
 
         Args:
@@ -178,8 +178,12 @@ class Glob(core.Dataset):
             name: Name of the dataset.
         """
         super().__init__(name)
-        pattern = str(pathlib.Path(pattern).expanduser() if expand_user else pathlib.Path(pattern))
+        self._pattern = str(pathlib.Path(pattern).expanduser() if expand_user else pathlib.Path(pattern))
         self._files = sorted(glob.glob(pattern, recursive=recursive))
+
+    @property
+    def pattern(self):
+        return self._pattern
 
     def __len__(self):
         return len(self._files)

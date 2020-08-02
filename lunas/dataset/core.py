@@ -51,6 +51,8 @@ class Dataset(abc.ABC):
         Continues iteration if the dataset instance just resumed from a saved state.
         Otherwise re-iterates from the beginning of the dataset.
         """
+        if len(self) == 0:
+            return
         ptr = self._ptr % len(self)
         if not self._resumed:
             ptr = 0

@@ -1,7 +1,7 @@
-**/test*.py
 **/*.pyc
+**/test*.py
 .idea/
+Lunas.egg-info/
 build/
 dist/
-Lunas.egg-info/
 publish_pypi.sh
