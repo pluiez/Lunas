@@ -10,7 +10,7 @@ from typing import List, Callable, Any, Union, Tuple
 
 import numpy
 
-__all__ = ['Map', 'Where', 'Repeat', 'Interleave', 'Shuffle', 'Sort', 'Slice', 'Shard', 'Window']
+__all__ = ['Dataset', 'Map', 'Where', 'Repeat', 'Interleave', 'Shuffle', 'Sort', 'Slice', 'Shard', 'Window']
 
 
 class Dataset(abc.ABC):

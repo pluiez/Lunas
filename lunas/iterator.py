@@ -7,14 +7,15 @@ import abc
 import bisect
 import collections
 import itertools
+import math
 import warnings
 from typing import Callable, Any, List, Iterator, Iterable
 
+import lunas.dataset.core as core
 import numpy
 
-import lunas.dataset.core as core
-
-__all__ = ['ConstantIterator', 'BucketIterator', 'ShardedIterator', 'DataLoader', 'get_bucket_boundaries']
+__all__ = ['BatchIterator', 'ConstantIterator', 'BucketIterator', 'ShardedIterator', 'DataLoader',
+           'get_bucket_boundaries']
 
 try:
     from torch.utils.data.dataset import IterableDataset as _IterableDataset
@@ -23,7 +24,7 @@ except ImportError:
         ...
 
 
-class _BatchIterator(abc.ABC, _IterableDataset):
+class BatchIterator(abc.ABC, _IterableDataset):
 
     def __init__(self, data_source: Iterable) -> None:
         """Initialises the iterator.
@@ -31,7 +32,7 @@ class _BatchIterator(abc.ABC, _IterableDataset):
         Args:
             data_source: An iterable object.
         """
-        if not (isinstance(data_source, core.Dataset) or isinstance(data_source, _BatchIterator)):
+        if not (isinstance(data_source, core.Dataset) or isinstance(data_source, BatchIterator)):
             raise TypeError(f'invalid dataset with type: "{type(data_source)}"')
         self._data_source = data_source
 
@@ -79,7 +80,7 @@ class DataLoader(object):
 
     def __init__(
             self,
-            batch_iterator: _BatchIterator,
+            batch_iterator: BatchIterator,
             num_workers: int = 0,
             collate_fn: Callable[[List], Any] = None,
             pin_memory: bool = False,
@@ -87,7 +88,7 @@ class DataLoader(object):
             worker_init_fn=None,
             multiprocessing_context=None
     ):
-        if not isinstance(batch_iterator, _BatchIterator):
+        if not isinstance(batch_iterator, BatchIterator):
             raise TypeError(f'invalid instance with type: "{type(batch_iterator)}"')
         self._batch_iterator = batch_iterator
         self._num_workers = num_workers
@@ -157,7 +158,8 @@ class _Queue(object):
         return [self.pop() for _ in range(k)]
 
 
-def get_bucket_boundaries(inflation_rate: float = 1.1, inflation_offset: int = 0, min_length: int = 8, max_length: int = 256, min_offset: int = 3):
+def get_bucket_boundaries(inflation_rate: float = 1.1, inflation_offset: int = 0, min_length: int = 8,
+                          max_length: int = 256, min_offset: int = 3):
     """
     Generate bucket boundaries to be used in BucketIterator. The value of inflation_rate and inflation_offset should
      be carefully picked to match the distribution of dataset. Greater value of inflation_rate or inflation_offset
@@ -192,7 +194,7 @@ def _resize_batch_size(num_sample, required_batch_size_multiple):
     return num_sample - (num_sample % required_batch_size_multiple)
 
 
-class ConstantIterator(_BatchIterator):
+class ConstantIterator(BatchIterator):
     """Constant-sized batch iterator.
 
     Iterates by a constant number of samples for each batch.
@@ -210,6 +212,7 @@ class ConstantIterator(_BatchIterator):
         super().__init__(data_source)
         self._batch_size = batch_size
         self._drop_tail = drop_tail
+        self._num_batches = None
 
     def generator(self):
         it = iter(self._data_source)
@@ -223,8 +226,16 @@ class ConstantIterator(_BatchIterator):
                     yield samples
                 break
 
+    def __len__(self):
+        if self._num_batches is None:
+            if self._drop_tail:
+                self._num_batches = len(self._data_source) // self._batch_size
+            else:
+                self._num_batches = math.ceil(len(self._data_source) // self._batch_size)
+        return self._num_batches
 
-class BucketIterator(_BatchIterator):
+
+class BucketIterator(BatchIterator):
     """Varying-sized batch iterator.
 
     Varying-sized batch implies that the number of samples across different batches can differ. Since for each sample we can
@@ -346,11 +357,11 @@ class BucketIterator(_BatchIterator):
         super().load(state)
 
 
-class ShardedIterator(_BatchIterator):
-    def __init__(self, data_source: _BatchIterator, num_shards: int = 1, index: int = 0, drop_tail=False) -> None:
+class ShardedIterator(BatchIterator):
+    def __init__(self, data_source: BatchIterator, num_shards: int = 1, index: int = 0, drop_tail=False) -> None:
         super().__init__(data_source)
         if not (num_shards > index >= 0):
-            raise ValueError(f'invalid num_shards and index: ({num_shards}, {index})')
+            raise ValueError(f'Invalid num_shards and index: ({num_shards}, {index})')
         self._num_shards = num_shards
         self._index = index
         self._drop_tail = drop_tail

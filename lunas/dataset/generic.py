@@ -76,6 +76,24 @@ class Enumerate(core.Nested):
             yield x
 
 
+class Chunk(core.Nested):
+
+    def __init__(self, dataset: core.Dataset, chunk_size: int, name: str = None):
+        if not (chunk_size >= 1):
+            raise ValueError(f'Invalid chunk_size: {chunk_size}.')
+        super().__init__(dataset, name)
+        self._chunk_size = chunk_size
+
+    def generator(self):
+        chunk = []
+        for x in self._dataset:
+            chunk.append(x)
+            if len(chunk) == self._chunk_size:
+                yield chunk
+        if chunk:
+            yield chunk
+
+
 class Zip(core.NestedN):
     """Zips multiple dataset.
 
@@ -179,7 +197,7 @@ class Glob(core.Dataset):
         """
         super().__init__(name)
         self._pattern = str(pathlib.Path(pattern).expanduser() if expand_user else pathlib.Path(pattern))
-        self._files = sorted(glob.glob(pattern, recursive=recursive))
+        self._files = sorted(glob.glob(self._pattern, recursive=recursive))
 
     @property
     def pattern(self):
