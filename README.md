@@ -23,7 +23,7 @@ Currently the following datasets are supported:
 4. `Range`: wraps a range of integers as a dataset, simulating builtin `range`.
 5. `Enumerate`: wraps a dataset with index for each element, simulating builtin `enumerate`.
 6. `Zip`: wraps multiple datasets as one dataset and supports custom padding for varying-sized datasets.
-7. `Concat`: concatenates two datasets as one dataset.
+7. `Concat`: concatenates multiple datasets as one dataset.
 8. `Glob`: wraps the standard `glob.glob` as a dataset.
 9. `Map`: transforms elements by a given mapping function.
 10. `Where`: filters elements by a given predicate function.

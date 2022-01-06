@@ -5,8 +5,7 @@ import glob
 import itertools
 import math
 import pathlib
-from typing import Union, Tuple, List
-
+from typing import Union, Tuple, List, Iterable
 import lunas.dataset.core as core
 
 __all__ = ['Array', 'Range', 'Enumerate', 'Zip', 'Concat', 'Glob']
@@ -166,11 +165,11 @@ class Zip(core.NestedN):
 class Concat(core.NestedN):
     """Concat dataset.
 
-    Concatenates two datasets.
+    Concatenates multiple datasets.
     """
 
-    def __init__(self, a: core.Dataset, b: core.Dataset, name: str = None):
-        super().__init__([a, b], name)
+    def __init__(self, datasets: Iterable[core.Dataset], name: str = None):
+        super().__init__(list(datasets), name)
 
     def __len__(self):
         return sum(map(len, self._datasets))
