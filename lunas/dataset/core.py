@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import abc
 import itertools
+import math
 import sys
 from typing import *
 
@@ -200,7 +201,8 @@ class NestedN(Dataset):
                                 f'Got: {[type(dataset) for dataset in datasets]}')
         for x in datasets:
             x._chk_and_inc_ref()
-        self._datasets = datasets
+
+        self._datasets: tuple = datasets
         self._resumable = all(dataset._resumable for dataset in datasets)
 
     @abc.abstractmethod
@@ -529,7 +531,12 @@ class Sort(Nested):
 class Slice(Nested):
     """Slices the dataset."""
 
-    def __init__(self, dataset: Dataset, start: Optional[int] = None, stop: Optional[int] = None, name: str = None):
+    def __init__(self,
+                 dataset: Dataset,
+                 start: Optional[int] = None,
+                 stop: Optional[int] = None,
+                 step: Optional[int] = None,
+                 name: str = None):
         """Initialises the dataset
 
         Args:
@@ -539,31 +546,28 @@ class Slice(Nested):
             name: Name of the dataset.
         """
         super().__init__(dataset, name)
-        if start is None and stop is None:
-            raise ValueError(f'At least one of start and stop should be provided.')
+        if start is not None and not (start >= 0):
+            raise ValueError(f'start for Slice must be a non-negative integer or None, got {start} instead.')
+        if stop is not None and not (stop >= 0):
+            raise ValueError(f'stop for Slice must be a non-negative integer or None, got {stop} instead.')
+        if step is not None and not (step > 0):
+            raise ValueError(f'step for Slice must be a positive integer or None, got {step} instead.')
 
-        if start is None:
-            if not (stop > 0):
-                raise ValueError(f'stop must be an integer value greater than 0: {stop}')
-            size = min(stop, len(dataset))
-        else:
-            if not (start >= 0):
-                raise ValueError(f'start must be an integer value greater than or equal to 0: {start}')
-            if stop is None:
-                size = len(dataset) - start
-            else:
-                size = min(stop, len(dataset)) - start
-            assert size > 0, size
-        self._size = size
+        start = start or 0
+        stop = len(dataset) if stop is None else min(len(dataset), stop)
+        step = step or 1
+
+        self._size = max(0, math.ceil((stop - start) / step))
         self._start = start
         self._stop = stop
+        self._step = step
 
     def __len__(self):
         return self._size
 
     def generator(self):
         it = iter(self._dataset)
-        it = itertools.islice(it, self._start, self._stop)
+        it = itertools.islice(it, self._start, self._stop, self._step)
         for x in it:
             yield x
 
@@ -602,19 +606,16 @@ class Shard(Slice):
             index: Index of current shard.
             name: Name of the sharded dataset.
         """
-        if not (num_shards > 1):
-            raise ValueError(f'num_shards must be an integer value greater than 1: {num_shards}')
         if not (index >= 0):
-            raise ValueError(f'index must be an integer value greater than or equal to 0: {index}')
+            raise ValueError(f'index must be an non-negative integer, got {index} instead.')
         if not (index < num_shards):
-            raise ValueError(f'index must be smaller than num_shards: {(index, num_shards)}')
+            raise ValueError(f'index must be smaller than num_shards: {(index, num_shards)}.')
         shard_size, remain = divmod(len(dataset), num_shards)
         shard_sizes = [shard_size] * num_shards
         for i in range(remain):
             shard_sizes[i] += 1
-        boundaries = [0] + list(itertools.accumulate(shard_sizes, lambda a, b: a + b)) + [len(dataset)]
-        start, stop = boundaries[index], boundaries[index + 1]
-        super().__init__(dataset, start, stop, name)
+        super().__init__(dataset, index, None, num_shards)
+        assert self._size == shard_sizes[index]
 
 
 class Window(Nested):
