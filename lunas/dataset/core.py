@@ -6,7 +6,7 @@ from __future__ import annotations
 import abc
 import itertools
 import sys
-from typing import List, Callable, Any, Union, Tuple
+from typing import *
 
 import numpy
 
@@ -189,7 +189,7 @@ class Dataset(abc.ABC):
 class NestedN(Dataset):
     """A wrapper for multiple datasets."""
 
-    def __init__(self, datasets: Union[Tuple[Dataset], List[Dataset]], name: str = None):
+    def __init__(self, datasets: Iterable[Dataset], name: str = None):
         super().__init__(name)
         if not isinstance(datasets, (tuple, list)):
             raise TypeError(f'datasets must be a tuple or a list: {type(datasets)}')
@@ -529,7 +529,7 @@ class Sort(Nested):
 class Slice(Nested):
     """Slices the dataset."""
 
-    def __init__(self, dataset: Dataset, start: Union[int, None], stop: Union[int, None], name: str = None):
+    def __init__(self, dataset: Dataset, start: Optional[int] = None, stop: Optional[int] = None, name: str = None):
         """Initialises the dataset
 
         Args:

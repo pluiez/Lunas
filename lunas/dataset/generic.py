@@ -5,7 +5,8 @@ import glob
 import itertools
 import math
 import pathlib
-from typing import Union, Tuple, List, Iterable
+from typing import *
+
 import lunas.dataset.core as core
 
 __all__ = ['Array', 'Range', 'Enumerate', 'Zip', 'Concat', 'Glob']
@@ -99,7 +100,7 @@ class Zip(core.NestedN):
     Zips multiple datasets, potentially with different sizes.
     """
 
-    def __init__(self, datasets: Union[Tuple[core.Dataset], List[core.Dataset]], mode: str = '=', padding: bool = False,
+    def __init__(self, datasets: Iterable[core.Dataset], mode: str = '=', padding: bool = False,
                  name: str = None):
         """Initialises the dataset.
 
@@ -156,7 +157,7 @@ class Zip(core.NestedN):
                 datasets = [itertools.chain.from_iterable(itertools.repeat(d))
                             if len(d) < len(self) else d
                             for d in self._datasets]
-                # Additionally islice is used here. zip will stop when one iterator raises StopIteration,
+                # Additionally, islice is used here. zip will stop when one iterator raises StopIteration,
                 # so any datasets before it will unexpectedly advance one element.
                 for x in itertools.islice(zip(*datasets), len(self)):
                     yield x

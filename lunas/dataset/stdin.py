@@ -11,7 +11,7 @@ class Stdin(core.Dataset):
 
     This is a wrapper for `sys.stdin`.
 
-    Warning: Never use this dataset in multi-processing context in order not to observe unexpected behaviours since
+    Warning: Never use this dataset in multiprocessing context in order not to observe unexpected behaviours since
     the correctness is not guaranteed.
     """
 

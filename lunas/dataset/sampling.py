@@ -1,10 +1,9 @@
-from typing import Union, Tuple, List
+import random
+from typing import *
 
 import lunas.dataset.core as core
 
 __all__ = ['Sampling']
-
-import random
 
 
 def normalise_weights(weights):
@@ -15,11 +14,11 @@ def normalise_weights(weights):
 class Sampling(core.NestedN):
     """Sampling dataset
 
-    Samples examples from multiple datasets by given weights.
+    Sample examples from multiple datasets by given weights.
     """
 
-    def __init__(self, datasets: Union[Tuple[core.Dataset], List[core.Dataset]],
-                 weights: Union[List[float], Tuple[float]] = None,
+    def __init__(self, datasets: Iterable[core.Dataset],
+                 weights: Optional[Iterable[float]] = None,
                  replacement: bool = True, name: str = None):
         if weights and sum(weights) != 1:
             raise ValueError(f'Expected the sum of weights to be 1.0, got {sum(weights)} instead.')

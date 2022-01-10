@@ -9,10 +9,11 @@ import collections
 import itertools
 import math
 import warnings
-from typing import Callable, Any, List, Iterator, Iterable
+from typing import *
+
+import numpy
 
 import lunas.dataset.core as core
-import numpy
 
 __all__ = ['BatchIterator', 'ConstantIterator', 'BucketIterator', 'ShardedIterator', 'DataLoader',
            'get_bucket_boundaries']
