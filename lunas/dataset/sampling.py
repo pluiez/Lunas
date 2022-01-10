@@ -6,11 +6,6 @@ import lunas.dataset.core as core
 __all__ = ['Sampling']
 
 
-def normalise_weights(weights):
-    sum_weight = sum(weights)
-    return [w / sum_weight for w in weights]
-
-
 class Sampling(core.NestedN):
     """Sampling dataset
 
