@@ -9,7 +9,7 @@ from typing import *
 
 import lunas.dataset.core as core
 
-__all__ = ['Array', 'Range', 'Enumerate', 'Zip', 'Concat', 'Glob']
+__all__ = ['Array', 'Range', 'Enumerate', 'Chunk', 'Zip', 'Concat', 'Glob']
 
 
 class Array(core.Dataset):
@@ -80,18 +80,23 @@ class Chunk(core.Nested):
 
     def __init__(self, dataset: core.Dataset, chunk_size: int, name: str = None):
         if not (chunk_size >= 1):
-            raise ValueError(f'Invalid chunk_size: {chunk_size}.')
+            raise ValueError(f'chunk_size ({chunk_size}) must be greater than 1.')
         super().__init__(dataset, name)
         self._chunk_size = chunk_size
 
     def generator(self):
-        chunk = []
-        for x in self._dataset:
-            chunk.append(x)
-            if len(chunk) == self._chunk_size:
+        it = iter(self._dataset)
+        stopped = False
+        while not stopped:
+            chunk = []
+            for _ in range(self._chunk_size):
+                try:
+                    chunk.append(next(it))
+                except StopIteration:
+                    stopped = True
+                    break
+            if chunk:
                 yield chunk
-        if chunk:
-            yield chunk
 
 
 class Zip(core.NestedN):

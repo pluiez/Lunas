@@ -31,7 +31,7 @@ class Dataset(abc.ABC):
         super().__init__()
         self._fns: List = []
         self._ptr = 0
-        self._name = name
+        self._name = name or self.__class__.__name__
         self._ref_count = 0
         self._resumed = False
         self._resumable = True
@@ -80,7 +80,7 @@ class Dataset(abc.ABC):
         """
         if not self._resumable:
             raise RuntimeError(f'Instance of {type(self)} is not resumable.')
-        return {'ptr': self._ptr}
+        return {'ptr': self._ptr, 'name': self._name}
 
     def load(self, state: dict) -> None:
         """Recovers from a checkpoint state.
@@ -90,6 +90,12 @@ class Dataset(abc.ABC):
         Args:
             state: A dictionary containing necessary information to recover iteration state.
         """
+        if state is None:
+            return
+
+        if state['name'] != self._name:
+            raise ValueError(f'name in state ({state["name"]}) should be the same as self._name ({self._name})')
+
         self._ptr = state['ptr']
         self._resumed = True
 
@@ -153,13 +159,17 @@ class Dataset(abc.ABC):
         """
         return Sort(self, buffer_size, key, name)
 
-    def slice(self, start, stop, name: str = None) -> Slice:
+    def slice(self,
+              start: Optional[int] = None,
+              stop: Optional[int] = None,
+              step: Optional[int] = None,
+              name: str = None) -> Slice:
         """See `Slice` class.
 
         Returns:
             A `Slice` dataset.
         """
-        return Slice(self, start, stop, name)
+        return Slice(self, start, stop, step, name)
 
     def take(self, n: int, name: str = None) -> Slice:
         """See `Take` class.
@@ -214,33 +224,6 @@ class NestedN(Dataset):
     def generator(self):
         """See base class."""
         raise NotImplementedError
-
-    def __iter__(self):
-        """See base class."""
-        self._ptr = self._ptr % len(self)
-        if not self._resumed:
-            self._ptr = 0
-        if self._ptr == 0 or not self._resumable:
-            self._reset()
-        self._resumed = False
-
-        for x in self.generator():
-            self._ptr += 1
-            if x is not None:
-                yield x
-
-    def state(self) -> dict:
-        """See base class."""
-        state = super().state()
-        state['datasets'] = [x.state() for x in self._datasets]
-        return state
-
-    def load(self, state: dict) -> None:
-        """See base class."""
-        super().load(state)
-        for x, state in zip(self._datasets, state['datasets']):
-            x.load(state)
-        self._resumed = True
 
     def _reset(self) -> None:
         """See base class."""
@@ -533,9 +516,9 @@ class Slice(Nested):
 
     def __init__(self,
                  dataset: Dataset,
-                 start: Optional[int] = None,
+                 start: int = 0,
                  stop: Optional[int] = None,
-                 step: Optional[int] = None,
+                 step: int = 1,
                  name: str = None):
         """Initialises the dataset
 
@@ -607,38 +590,9 @@ class Shard(Slice):
             name: Name of the sharded dataset.
         """
         if not (index >= 0):
-            raise ValueError(f'index must be an non-negative integer, got {index} instead.')
+            raise ValueError(f'index ({index}) must be an non-negative integer.')
         if not (index < num_shards):
-            raise ValueError(f'index must be smaller than num_shards: {(index, num_shards)}.')
-        shard_size, remain = divmod(len(dataset), num_shards)
-        shard_sizes = [shard_size] * num_shards
-        for i in range(remain):
-            shard_sizes[i] += 1
+            raise ValueError(f'index ({index}) must be smaller than num_shards ({num_shards}).')
+        if len(dataset) < num_shards:
+            raise ValueError(f'num_shards ({num_shards}) must be less than or equal to dataset size ({len(dataset)}).')
         super().__init__(dataset, index, None, num_shards)
-        assert self._size == shard_sizes[index]
-
-
-class Window(Nested):
-    def __init__(self, dataset: Dataset, size: int, shift: int = None, stride: int = 1, drop_tail: bool = False,
-                 name: str = None):
-        super().__init__(dataset, name)
-        if shift is None:
-            shift = size
-
-        if not (size > 1):
-            raise ValueError(f'size must be an integer value greater than 1: {size}')
-        if not (shift > 0):
-            raise ValueError(f'shift must be an integer value greater than 0: {shift}')
-        if not (stride > 0):
-            raise ValueError(f'stride must be an integer value greater than 0: {stride}')
-
-        self._size = size
-        self._shift = shift
-        self._stride = stride
-        self._drop_tail = drop_tail
-
-    def __len__(self):
-        raise NotImplementedError
-
-    def generator(self):
-        raise NotImplementedError
