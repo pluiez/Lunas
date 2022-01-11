@@ -11,7 +11,20 @@ from typing import *
 
 import numpy
 
-__all__ = ['Dataset', 'Map', 'Where', 'Repeat', 'Interleave', 'Shuffle', 'Sort', 'Slice', 'Shard', 'Window']
+__all__ = [
+    'Dataset',
+    'Map',
+    'Where',
+    'Repeat',
+    'Interleave',
+    'Shuffle',
+    'Sort',
+    'Slice',
+    'Shard',
+    'Enumerate',
+    'Chunk',
+    'Concat'
+]
 
 
 class Dataset(abc.ABC):
@@ -50,7 +63,7 @@ class Dataset(abc.ABC):
         """Returns an iterator of the dataset.
 
         Continues iteration if the dataset instance just resumed from a saved state.
-        Otherwise re-iterates from the beginning of the dataset.
+        Otherwise, re-iterates from the beginning of the dataset.
         """
         if len(self) == 0:
             return
@@ -177,7 +190,7 @@ class Dataset(abc.ABC):
         Returns:
             A `Take` dataset.
         """
-        return Slice(self, None, n, name)
+        return Slice(self, stop=n, name=name)
 
     def skip(self, n: int, name: str = None) -> Slice:
         """See `Skip` class.
@@ -185,16 +198,31 @@ class Dataset(abc.ABC):
         Returns:
             A `Skip` dataset.
         """
-        return Slice(self, n, None, name)
+        return Slice(self, start=n, name=name)
 
-    def window(self, size: int, shift: int = None, stride: int = 1, drop_tail: bool = False,
-               name: str = None) -> Window:
-        """See `Window` class.
+    def enumerate(self, start: int = 0, name: str = None) -> Enumerate:
+        """See `Enumerate` class.
 
         Returns:
-            A `Window` dataset.
+            A `Enumerate` dataset.
         """
-        return Window(self, size, shift, stride, drop_tail, name)
+        return Enumerate(self, start, name)
+
+    def chunk(self, chunk_size: int, name: str = None) -> Chunk:
+        """See `Chunk` class.
+
+        Returns:
+            A `Chunk` dataset.
+        """
+        return Chunk(self, chunk_size, name)
+
+    def concat(self, other: 'Dataset', name: str = None) -> Concat:
+        """See `Concat` class.
+
+        Returns:
+            A `Concat` dataset.
+        """
+        return Concat([self, other], name)
 
 
 class NestedN(Dataset):
@@ -596,3 +624,61 @@ class Shard(Slice):
         if len(dataset) < num_shards:
             raise ValueError(f'num_shards ({num_shards}) must be less than or equal to dataset size ({len(dataset)}).')
         super().__init__(dataset, index, None, num_shards)
+
+
+class Enumerate(Nested):
+    """Enumerate a dataset.
+
+    Simulates the builtin enumerate function and attach an index to each element in the given dataset.
+    """
+
+    def __init__(self, dataset: Dataset, start: int = 0, name: str = None):
+        super().__init__(dataset, name)
+        self._start = start
+
+    def __len__(self):
+        return len(self._dataset)
+
+    def generator(self):
+        for x in enumerate(self._dataset, self._start):
+            yield x
+
+
+class Chunk(Nested):
+
+    def __init__(self, dataset: Dataset, chunk_size: int, name: str = None):
+        if not (chunk_size >= 1):
+            raise ValueError(f'chunk_size ({chunk_size}) must be greater than 1.')
+        super().__init__(dataset, name)
+        self._chunk_size = chunk_size
+
+    def generator(self):
+        it = iter(self._dataset)
+        stopped = False
+        while not stopped:
+            chunk = []
+            for _ in range(self._chunk_size):
+                try:
+                    chunk.append(next(it))
+                except StopIteration:
+                    stopped = True
+                    break
+            if chunk:
+                yield chunk
+
+
+class Concat(NestedN):
+    """Concat dataset.
+
+    Concatenates multiple datasets.
+    """
+
+    def __init__(self, datasets: Iterable[Dataset], name: str = None):
+        super().__init__(list(datasets), name)
+
+    def __len__(self):
+        return sum(map(len, self._datasets))
+
+    def generator(self):
+        for x in itertools.chain(*self._datasets):
+            yield x

@@ -9,7 +9,7 @@ from typing import *
 
 import lunas.dataset.core as core
 
-__all__ = ['Array', 'Range', 'Enumerate', 'Chunk', 'Zip', 'Concat', 'Glob']
+__all__ = ['Array', 'Range', 'Zip', 'Glob']
 
 
 class Array(core.Dataset):
@@ -56,47 +56,6 @@ class Range(core.Dataset):
     def generator(self):
         for x in range(self._start, self._stop, self._step):
             yield x
-
-
-class Enumerate(core.Nested):
-    """Enumerate a dataset.
-
-    Simulates the builtin enumerate function and attach an index to each element in the given dataset.
-    """
-
-    def __init__(self, dataset: core.Dataset, start: int = 0, name: str = None):
-        super().__init__(dataset, name)
-        self._start = start
-
-    def __len__(self):
-        return len(self._dataset)
-
-    def generator(self):
-        for x in enumerate(self._dataset, self._start):
-            yield x
-
-
-class Chunk(core.Nested):
-
-    def __init__(self, dataset: core.Dataset, chunk_size: int, name: str = None):
-        if not (chunk_size >= 1):
-            raise ValueError(f'chunk_size ({chunk_size}) must be greater than 1.')
-        super().__init__(dataset, name)
-        self._chunk_size = chunk_size
-
-    def generator(self):
-        it = iter(self._dataset)
-        stopped = False
-        while not stopped:
-            chunk = []
-            for _ in range(self._chunk_size):
-                try:
-                    chunk.append(next(it))
-                except StopIteration:
-                    stopped = True
-                    break
-            if chunk:
-                yield chunk
 
 
 class Zip(core.NestedN):
@@ -166,23 +125,6 @@ class Zip(core.NestedN):
                 # so any datasets before it will unexpectedly advance one element.
                 for x in itertools.islice(zip(*datasets), len(self)):
                     yield x
-
-
-class Concat(core.NestedN):
-    """Concat dataset.
-
-    Concatenates multiple datasets.
-    """
-
-    def __init__(self, datasets: Iterable[core.Dataset], name: str = None):
-        super().__init__(list(datasets), name)
-
-    def __len__(self):
-        return sum(map(len, self._datasets))
-
-    def generator(self):
-        for x in itertools.chain(*self._datasets):
-            yield x
 
 
 class Glob(core.Dataset):
