@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import collections.abc
 import glob
 import itertools
 import math
@@ -12,29 +11,32 @@ import lunas.dataset.core as core
 __all__ = ['Array', 'Range', 'Zip', 'Glob']
 
 
-class Array(core.Dataset):
-    """A dataset that wraps around any sequential data.
+class Array(core.Dataset, core.Sizable):
+    """A dataset that wraps around any data as an iterable array.
 
-    Array dataset accepts any iterable data. Note that the iterable data will be stored into a list immediately during
-    initialisation.
+    This dataset accepts any data. Note that the iterable data will be converted to an object with give array_type.
     """
 
-    def __init__(self, data: collections.abc.Iterable, name: str = None):
+    def __init__(self, data: Any, array_type: TypeVar('T') = list, name: str = None):
         super().__init__(name)
-        self._data = list(data)
+        self._data = array_type(data)
+        self._length = None
 
-    def __len__(self):
-        return len(self._data)
+    @property
+    def length(self):
+        if self._length is None:
+            self._length = len(self._data)
+        return self._length
 
     def generator(self):
         for x in self._data:
             yield x
 
 
-class Range(core.Dataset):
+class Range(core.Dataset, core.Sizable):
     """Range dataset.
 
-    Simulates the builtin range function.
+    This dataset simulates the builtin `range` function.
     """
 
     def __init__(self, start: int, stop: int = None, step: int = None, name: str = None):
@@ -49,19 +51,24 @@ class Range(core.Dataset):
         self._stop = stop
         self._step = step
 
-    def __len__(self):
-        start, stop, step = self._start, self._stop, self._step
-        return abs(int(math.ceil((stop - start) / step)))
+        self._length = None
+
+    @property
+    def length(self):
+        if self._length is None:
+            start, stop, step = self._start, self._stop, self._step
+            self._length = max(0, int(math.ceil((stop - start) / step)))
+        return self._length
 
     def generator(self):
         for x in range(self._start, self._stop, self._step):
             yield x
 
 
-class Zip(core.NestedN):
-    """Zips multiple dataset.
+class Zip(core.NestedN, core.Sizable):
+    """Zip multiple dataset.
 
-    Zips multiple datasets, potentially with different sizes.
+    This dataset zips multiple datasets, potentially with different sizes.
     """
 
     def __init__(self, datasets: Iterable[core.Dataset], mode: str = '=', padding: bool = False,
@@ -69,41 +76,48 @@ class Zip(core.NestedN):
         """Initialises the dataset.
 
         Args:
-            datasets: The dataset objects to zip.
-            mode: A character, available options include '=' '<' and '>'.
+            datasets: the datasets to zip.
+            mode: a character, available options include '=' '<' and '>'.
                 '=' requires the datasets to have the same sizes;
                 '<' behaves similarly to the builtin `zip`, which truncate the bigger datasets to align with the
                 smallest one;
                 '>' is similar to `itertools.zip_longest`, fill the smaller datasets with strategy specified by
                 `padding`.
-            padding: A boolean value that determines how to pad the small datasets when they are exhausted.
+            padding: a boolean value that determines how to pad the small datasets when they are exhausted.
                 A `False` will produce `None` as padding, while `True` will continue producing elements from smaller
                 datasets. Only works when mode is '>'.
-            name: Name of the dataset.
+            name: name of the dataset.
         """
         super().__init__(datasets, name)
-        sizes = tuple(map(len, datasets))
-        if mode == '=':
-            if len(set(sizes)) > 1:
-                raise RuntimeError(f'Datasets must have exactly the same sizes. Got: {tuple(sizes)}')
-            size = sizes[0]
-        elif mode == '<':
-            size = min(sizes)
-        elif mode == '>':
-            size = max(sizes)
-        else:
+        if mode not in ('=', '<', '>'):
             raise ValueError(f'Unknown mode: {mode}')
 
+        self._length = None
+
+        if mode == '=':
+            sizes = tuple(map(len, datasets))
+            if len(set(sizes)) > 1:
+                raise RuntimeError(f'Datasets must have exactly the same sizes ({tuple(sizes)}).')
+
+            self._length = sizes[0]
+
         if not isinstance(padding, bool):
-            raise ValueError(f'Expected padding as a bool value, got {padding}')
-        self._size = size
-        self._sizes = sizes
+            raise ValueError(f'padding ({padding}) must be a bool value.')
 
         self._mode = mode
         self._padding = padding
 
-    def __len__(self):
-        return self._size
+    @property
+    def length(self):
+        if self._length is None:
+            sizes = tuple(map(len, self._datasets))
+            if self._mode == '<':
+                self._length = min(sizes)
+            elif self._mode == '>':
+                self._length = max(sizes)
+            else:
+                raise ValueError(f'Unknown mode: {self._mode}')
+        return self._length
 
     def generator(self):
         if self._mode in ['=', '<']:
@@ -127,31 +141,29 @@ class Zip(core.NestedN):
                     yield x
 
 
-class Glob(core.Dataset):
+class Glob(core.Dataset, core.Sizable):
     """Glob dataset.
 
-    Use standard glob module to wrap matched directories/files for given pattern into a dataset.
+    This dataset uses standard glob module to wrap matched directories/files for given pattern into a dataset.
     """
 
     def __init__(self, pattern: str, recursive: bool = False, expand_user: bool = True, name: str = None):
         """Initialises the dataset.
 
         Args:
-            pattern: A glob patter.
-            recursive: Whether matches recursively.
-            expand_user: Whether expands the user home path.
-            name: Name of the dataset.
+            pattern: a glob pattern.
+            recursive: whether matches recursively.
+            expand_user: whether expands the user home path.
+            name: name of the dataset.
         """
         super().__init__(name)
         self._pattern = str(pathlib.Path(pattern).expanduser() if expand_user else pathlib.Path(pattern))
         self._files = sorted(glob.glob(self._pattern, recursive=recursive))
+        self._length = len(self._files)
 
     @property
-    def pattern(self):
-        return self._pattern
-
-    def __len__(self):
-        return len(self._files)
+    def length(self):
+        return self._length
 
     def generator(self):
         for x in self._files:

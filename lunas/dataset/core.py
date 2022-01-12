@@ -1,4 +1,4 @@
-""" Abstract dataset class and datasets for generic use.
+""" Abstract dataset classes and implementation of core datasets.
 """
 
 from __future__ import annotations
@@ -13,6 +13,10 @@ import numpy
 
 __all__ = [
     'Dataset',
+    'Sizable',
+    'NestedN',
+    'Nested',
+    'NestedSizable',
     'Map',
     'Where',
     'Repeat',
@@ -22,7 +26,7 @@ __all__ = [
     'Slice',
     'Shard',
     'Enumerate',
-    'Chunk',
+    'Group',
     'Concat'
 ]
 
@@ -30,8 +34,8 @@ __all__ = [
 class Dataset(abc.ABC):
     """An abstract class representing a dataset.
 
-    A dataset is a wrapper for certain data sources, providing interfaces to transformation and filtration on
-    the samples, which are evaluated lazily.
+    A dataset is a wrapper for certain data source, providing interfaces to process and filter
+    dataset elements during iteration, which are evaluated at runtime.
 
     The elements can be accessed through Python's iterator interface.
     """
@@ -39,45 +43,40 @@ class Dataset(abc.ABC):
     def __init__(self, name: str = None):
         """Initialises the dataset.
         Args:
-            name: Name of this dataset, useful for providing debugging information.
+            name: name of the dataset.
         """
         super().__init__()
-        self._fns: List = []
         self._ptr = 0
-        self._name = name or self.__class__.__name__
         self._ref_count = 0
         self._resumed = False
         self._resumable = True
 
-    @abc.abstractmethod
-    def __len__(self):
-        """Returns size of the dataset."""
-        raise NotImplementedError
+        self._name = name or self.__class__.__name__
 
     @abc.abstractmethod
     def generator(self):
-        """Yields a single sample from data source."""
+        """A generator generates samples from the data source."""
         raise NotImplementedError
 
     def __iter__(self):
         """Returns an iterator of the dataset.
 
-        Continues iteration if the dataset instance just resumed from a saved state.
-        Otherwise, re-iterates from the beginning of the dataset.
+        Optionally, the iteration can be resumed by loading previously saved state, see `Dataset.state` and `Dataset.load`.
         """
-        if len(self) == 0:
-            return
-        ptr = self._ptr % len(self)
         if not self._resumed:
-            ptr = 0
+            self._reset()
+
         it = self.generator()
-        if self._resumable:
-            it = itertools.islice(it, ptr, None)
+        if self._resumable and self._ptr > 0:
+            it = itertools.islice(it, self._ptr, None)
         self._resumed = False
+
         for x in it:
             self._ptr += 1
             if x is not None:
                 yield x
+
+        self._reset()
 
     @property
     def name(self):
@@ -86,14 +85,14 @@ class Dataset(abc.ABC):
     def state(self) -> dict:
         """Returns a checkpoint state
 
-        The checkpoint can be used to resumes iteration from previous stopping point.
+        The checkpoint can be used to resume iteration from previous stopping position.
 
         Returns:
-            A dictionary containing necessary information to recover iteration state later.
+            A dictionary containing necessary information to recover iteration state.
         """
         if not self._resumable:
-            raise RuntimeError(f'Instance of {type(self)} is not resumable.')
-        return {'ptr': self._ptr, 'name': self._name}
+            raise RuntimeError(f'dataset ({self.name}) is not resumable.')
+        return {'ptr': self._ptr, 'name': self.name}
 
     def load(self, state: dict) -> None:
         """Recovers from a checkpoint state.
@@ -101,13 +100,13 @@ class Dataset(abc.ABC):
         Once recovered, we can create an iterator for the dataset to continue iteration from previous iteration.
 
         Args:
-            state: A dictionary containing necessary information to recover iteration state.
+            state: a dictionary containing necessary information to recover iteration state.
         """
         if state is None:
             return
 
-        if state['name'] != self._name:
-            raise ValueError(f'name in state ({state["name"]}) should be the same as self._name ({self._name})')
+        if state['name'] != self.name:
+            raise ValueError(f'name in state ({state["name"]}) should be the same as self.name ({self.name})')
 
         self._ptr = state['ptr']
         self._resumed = True
@@ -125,19 +124,22 @@ class Dataset(abc.ABC):
         self._ptr = 0
         self._resumed = False
 
-    def map(self, fn: Callable[[Any], Any], unpack_args=False, unpack_kwargs=False, name: str = None) -> Map:
-        if not callable(fn):
-            raise ValueError(f'instance of type "{type(fn)}" is not callable.')
-        if unpack_args and unpack_kwargs:
-            raise ValueError(f'Cannot unpack as args and kwargs at the same time.')
+    def map(self, fn: Callable[[Any], Any], unpack_args: bool = False, unpack_kwargs: bool = False,
+            name: str = None) -> Map:
+        """See `Map` class.
+
+        Returns:
+            A `Map` dataset.
+        """
         return Map(self, fn, unpack_args, unpack_kwargs, name)
 
-    def where(self, predicate: Callable[[Any], bool], unpack_args=False, unpack_kwargs=False,
+    def where(self, predicate: Callable[[Any], bool], unpack_args: bool = False, unpack_kwargs: bool = False,
               name: str = None) -> Where:
-        if not callable(predicate):
-            raise ValueError(f'instance of type "{type(predicate)}" is not callable.')
-        if unpack_args and unpack_kwargs:
-            raise ValueError(f'Cannot unpack as args and kwargs at the same time.')
+        """See `Where` class.
+
+        Returns:
+            A `Where` dataset.
+        """
         return Where(self, predicate, unpack_args, unpack_kwargs, name)
 
     def repeat(self, n: int = None, name: str = None) -> Repeat:
@@ -148,13 +150,13 @@ class Dataset(abc.ABC):
         """
         return Repeat(self, n, name)
 
-    def shard(self, num_shards: int, index: int, name: str = None) -> Shard:
+    def shard(self, num_shards: int, shard_index: int, name: str = None) -> Shard:
         """See `Shard` class.
 
         Returns:
             A `Shard` dataset.
         """
-        return Shard(self, num_shards, index, name)
+        return Shard(self, num_shards, shard_index, name)
 
     def shuffle(self, buffer_size: int, name: str = None) -> Shuffle:
         """See `Shuffle` class.
@@ -172,11 +174,7 @@ class Dataset(abc.ABC):
         """
         return Sort(self, buffer_size, key, name)
 
-    def slice(self,
-              start: Optional[int] = None,
-              stop: Optional[int] = None,
-              step: Optional[int] = None,
-              name: str = None) -> Slice:
+    def slice(self, start: int = None, stop: int = None, step: int = None, name: str = None) -> Slice:
         """See `Slice` class.
 
         Returns:
@@ -208,13 +206,21 @@ class Dataset(abc.ABC):
         """
         return Enumerate(self, start, name)
 
-    def chunk(self, chunk_size: int, name: str = None) -> Chunk:
-        """See `Chunk` class.
+    def group(self, chunk_size: int, name: str = None) -> Group:
+        """See `Group` class.
 
         Returns:
-            A `Chunk` dataset.
+            A `Group` dataset.
         """
-        return Chunk(self, chunk_size, name)
+        return Group(self, chunk_size, name)
+
+    def flatten(self, name: str = None) -> Flatten:
+        """See `Flatten` class.
+
+        Returns:
+            A `Flatten` dataset.
+        """
+        return Flatten(self, name)
 
     def concat(self, other: 'Dataset', name: str = None) -> Concat:
         """See `Concat` class.
@@ -225,18 +231,29 @@ class Dataset(abc.ABC):
         return Concat([self, other], name)
 
 
-class NestedN(Dataset):
-    """A wrapper for multiple datasets."""
+class Sizable(abc.ABC):
+    """An interface to evaluate length of a dataset."""
+
+    @property
+    def length(self):
+        raise NotImplementedError
+
+    def __len__(self):
+        """Returns size of the dataset."""
+        return self.length
+
+
+class NestedN(Dataset, abc.ABC):
+    """A wrapper around multiple datasets."""
 
     def __init__(self, datasets: Iterable[Dataset], name: str = None):
         super().__init__(name)
         if not isinstance(datasets, (tuple, list)):
-            raise TypeError(f'datasets must be a tuple or a list: {type(datasets)}')
+            raise TypeError(f'datasets ({type(datasets)}) must be a tuple or a list.')
         datasets = tuple(datasets)
         for dataset in datasets:
             if not isinstance(dataset, Dataset):
-                raise TypeError(f'datasets must subclass Dataset. '
-                                f'Got: {[type(dataset) for dataset in datasets]}')
+                raise TypeError(f'datasets ({[type(dataset) for dataset in datasets]}) must inherit Dataset.')
         for x in datasets:
             x._chk_and_inc_ref()
 
@@ -244,43 +261,42 @@ class NestedN(Dataset):
         self._resumable = all(dataset._resumable for dataset in datasets)
 
     @abc.abstractmethod
-    def __len__(self):
-        """See base class."""
-        raise NotImplementedError
-
-    @abc.abstractmethod
     def generator(self):
         """See base class."""
         raise NotImplementedError
 
     def _reset(self) -> None:
-        """See base class."""
         super()._reset()
         for x in self._datasets:
             x._reset()
 
 
-class Nested(NestedN):
-    """A wrapper for one dataset."""
+class Nested(NestedN, abc.ABC):
+    """A wrapper around a single dataset."""
 
     def __init__(self, dataset: Dataset, name: str = None):
         super().__init__([dataset], name)
         self._dataset = dataset
 
-    @abc.abstractmethod
-    def generator(self):
-        """See base class."""
-        raise NotImplementedError
 
-    def __len__(self):
-        """See base class."""
-        return len(self._dataset)
+class NestedSizable(Nested, Sizable, abc.ABC):
+    """A sizable nested dataset."""
+
+    def __init__(self, dataset: Dataset, name: str = None):
+        super().__init__(dataset, name)
+        self._length = None
+
+    @property
+    def length(self):
+        if self._length is None:
+            self._length = len(self._dataset)
+        return self._length
 
 
-class Map(Nested):
-    """Transforms a sample.
+class Map(NestedSizable):
+    """Transform a sample.
 
-    Applies transformation to every sample in the dataset. Note that the transformation won't be applied until
+    This dataset applies transformation to every sample in the dataset. Note that the transformation won't be applied until
     we try to access an element through an iterator.
 
     Example usage:
@@ -291,20 +307,23 @@ class Map(Nested):
         transformed = list(ds)
     """
 
-    def __init__(self, dataset: Dataset, fn: Callable, unpack_args=False, unpack_kwargs=False,
-                 name: str = None) -> None:
+    def __init__(self, dataset: Dataset, fn: Callable[[Any], Any], unpack_args: bool = False,
+                 unpack_kwargs: bool = False, name: str = None) -> None:
         """Initialises the dataset.
 
         Args:
-            dataset: The dataset object to apply transformation.
-            fn: A function that accepts a sample as input and returns a transformed one.
+            dataset: the dataset to apply transformation.
+            fn: a function that accepts a sample as input and returns a transformed output.
             unpack_args:
             unpack_kwargs:
             name:
         """
         super().__init__(dataset, name)
+        if not callable(fn):
+            raise ValueError(f'fn ({type(fn)}) must be callable.')
         if unpack_args and unpack_kwargs:
-            raise ValueError(f'Cannot unpack as args and kwargs at the same time.')
+            raise ValueError(f'unpacking as args and kwargs are conflicting.')
+
         self._fn = fn
         self._unpack_args = unpack_args
         self._unpack_kwargs = unpack_kwargs
@@ -322,10 +341,10 @@ class Map(Nested):
 
 
 class Where(Nested):
-    """Filters a sample by given predicate.
+    """Filter a sample by given predicate.
 
-    Applies filter to every sample in the dataset. Note that the filter won't be applied until we try to access
-    an element through the iterator.
+    This dataset applies filter to every sample in the dataset. Note that the filter won't be applied until we try to access
+    an element through the iterator. A sample is only preserved if the predicate is evaluated True.
 
     Example usage:
 
@@ -335,21 +354,23 @@ class Where(Nested):
         transformed = list(ds)
     """
 
-    def __init__(self, dataset: Dataset, predicate: Callable[[Any], bool], unpack_args=False,
-                 unpack_kwargs=False, name: str = None):
+    def __init__(self, dataset: Dataset, predicate: Callable[[Any], bool], unpack_args: bool = False,
+                 unpack_kwargs: bool = False, name: str = None):
         """
-
         Args:
-            dataset: The dataset object to apply filter.
-            predicate: A function that accepts a sample as input and returns a `bool` value to indicate whether
-            this sample should be dropped.
+            dataset: the dataset to apply filter.
+            predicate: a function that accepts a sample as input and returns a `bool` value to indicate whether
+            this sample should be preserved.
             unpack_args:
             unpack_kwargs:
             name:
         """
         super().__init__(dataset, name)
+        if not callable(predicate):
+            raise ValueError(f'predicate ({type(predicate)}) must be callable.')
         if unpack_args and unpack_kwargs:
-            raise ValueError(f'Cannot unpack as args and kwargs at the same time.')
+            raise ValueError(f'unpacking as args and kwargs are conflicting.')
+
         self._predicate = predicate
         self._unpack_args = unpack_args
         self._unpack_kwargs = unpack_kwargs
@@ -369,23 +390,27 @@ class Where(Nested):
                     yield x
 
 
-class Repeat(Nested):
-    """Repeats a dataset."""
+class Repeat(NestedSizable):
+    """Repeat a dataset."""
 
     def __init__(self, dataset: Dataset, n: int = None, name: str = None):
         """Initialises the dataset.
         Args:
-            dataset: A dataset object to repeat.
-            n: A value indicates how many times the dataset will repeats. Repeats endlessly if provided `None`.
-            name: Name of the dataset.
+            dataset: a dataset to repeat.
+            n: a value indicates how many times the dataset will repeat. Repeats endlessly if n is None.
+            name:
         """
         super().__init__(dataset, name)
         if not (n is None or n > 0):
-            raise ValueError(f'n must be greater than 0: {n}')
+            raise ValueError(f'n ({n}) must be a positive integer or None.')
+
         self._n = n
 
-    def __len__(self):
-        return len(self._dataset) * self._n if self._n is not None else sys.maxsize
+    @property
+    def length(self):
+        if self._length is None:
+            self._length = len(self._dataset) * self._n if self._n is not None else sys.maxsize
+        return self._length
 
     def generator(self):
         repeats = itertools.repeat(self._dataset, self._n) if self._n else itertools.repeat(self._dataset)
@@ -415,19 +440,20 @@ class Interleave(Nested):
         """Initialises the dataset.
 
         Args:
-            dataset: A dataset object to generate subsets.
-            map_fn: Mapping element of `dataset` to a new dataset.
-            cycle_length: Number of consecutive datasets to access.
-            block_length: Number of consecutive elements to access.
-            name: Name of the dataset.
+            dataset: a dataset object to generate subsets.
+            map_fn: mapping element of `dataset` to a new dataset.
+            cycle_length: number of consecutive datasets to access.
+            block_length: number of consecutive elements to access.
+            name: name of the dataset.
         """
         super().__init__(dataset.map(lambda x: iter(map_fn(x))), name)
         if not callable(map_fn):
-            raise ValueError(f'instance of type "{type(map_fn)}" is not callable.')
+            raise ValueError(f'map_fn ({type(map_fn)}) must be callable.')
         if not (cycle_length > 0):
-            raise ValueError(f'cycle_length must be greater than 0: {cycle_length}')
+            raise ValueError(f'cycle_length ({cycle_length}) must be a positive integer.')
         if not (block_length > 0):
-            raise ValueError(f'block_length must be greater than 0: {block_length}')
+            raise ValueError(f'block_length ({block_length}) must be a positive integer.')
+
         self._cycle_length = cycle_length
         self._block_length = block_length
 
@@ -453,53 +479,55 @@ class Interleave(Nested):
                 i += 1
 
 
-class Shuffle(Nested):
-    """Shuffles the dataset.
+class Shuffle(NestedSizable):
+    """Shuffle a dataset.
 
-    A queue-based shuffler to shuffle incoming input stream without loading all data into memory at once. The algorithm
-    is an approximation of global shuffling.
+    This dataset provides a queue-based shuffling to shuffle a dataset without loading all data into memory at once.
+    The algorithm is an approximation of global shuffling.
     """
 
     def __init__(self, dataset: Dataset, buffer_size: int, name: str = None):
         """Initialises the dataset.
 
         Args:
-            dataset: A dataset object to shuffle.
-            buffer_size: Shuffles within the buffer size.
-            name: Name of the dataset.
+            dataset: a dataset to shuffle.
+            buffer_size: shuffles within the given buffer size.
+            name:
         """
         super().__init__(dataset, name)
         if not (buffer_size > 1):
-            raise ValueError(f'buffer_size must be greater than 1: {buffer_size}')
+            raise ValueError(f'buffer_size ({buffer_size}) must be a positive integer greater than 1.')
+
         self._buffer_size = buffer_size
 
     def generator(self):
         it = iter(self._dataset)
-        size = min(self._buffer_size, len(self._dataset))
-        buffer = list(itertools.islice(it, size))
-        indices = numpy.nditer(numpy.random.randint(0, size, size))
+        buffer = list(itertools.islice(it, self._buffer_size))
+        buf_size = len(buffer)
+        indices = numpy.nditer(numpy.random.randint(0, buf_size, buf_size))
 
         for x in it:
             try:
                 i = next(indices)
             except StopIteration:
-                indices = numpy.nditer(numpy.random.randint(0, size, size))
+                indices = numpy.nditer(numpy.random.randint(0, buf_size, buf_size))
                 i = next(indices)
             yield buffer[i]
             buffer[i] = x
 
         numpy.random.shuffle(buffer)
+
         for x in buffer:
             yield x
 
 
-class Sort(Nested):
-    """Sorts the dataset.
+class Sort(NestedSizable):
+    """Sort a dataset.
 
-    A partial sorting that sorts elements from the dataset in a custom-sized buffer so that we don't load all data
-    into memory at once. Typically used to gather sequences of similar length together to reduce redundant
-    computational overheads, while preserving randomness introduced by shuffling. To that end, we must use a larger
-    buffer_size in Shuffle than Sort.
+    This dataset provides a partial sorting to sort elements from a dataset in a custom-sized buffer, so that we don't
+    load all data into memory at once. It is typically used to gather sequences of similar length together to reduce
+    redundant computational overheads, while preserving randomness introduced by shuffling. To that end, we must use
+    a larger buffer_size in Shuffle than Sort.
 
     For example:
         ds = TextLine(filename)
@@ -510,28 +538,27 @@ class Sort(Nested):
         """Initialises the dataset.
 
         Args:
-            dataset: A dataset object to sort.
-            buffer_size: Sorts within this number of samples.
-            key: A function to get key for comparison.
-            name: Name of the dataset.
+            dataset: a dataset to sort.
+            buffer_size: sorts within the given buffer size.
+            key: a function to get key for comparison.
+            name:
         """
         super().__init__(dataset, name)
         if not (buffer_size > 1):
-            raise ValueError(f'buffer_size must be greater than 1: {buffer_size}')
+            raise ValueError(f'buffer_size ({buffer_size}) must be a positive integer greater than 1.')
         if not (key is None or callable(key)):
-            raise ValueError(f'instance of type "{key}" is not callable.')
+            raise ValueError(f'key ({type(key)}) must be callable.')
+
         self._buffer_size = buffer_size
         self._key = key
 
-    def __len__(self):
-        return len(self._dataset)
-
     def generator(self):
         it = iter(self._dataset)
-        size = min(self._buffer_size, len(self._dataset))
+        buf_size = self._buffer_size
 
         while True:
-            buffer = sorted(itertools.islice(it, size), key=self._key)
+            buffer = sorted(itertools.islice(it, buf_size), key=self._key)
+
             for x in buffer:
                 yield x
 
@@ -539,68 +566,52 @@ class Sort(Nested):
                 break
 
 
-class Slice(Nested):
-    """Slices the dataset."""
+class Slice(NestedSizable):
+    """Slice a dataset."""
 
-    def __init__(self,
-                 dataset: Dataset,
-                 start: int = 0,
-                 stop: Optional[int] = None,
-                 step: int = 1,
-                 name: str = None):
+    def __init__(self, dataset: Dataset, start: int = 0, stop: int = None, step: int = 1, name: str = None):
         """Initialises the dataset
 
         Args:
-            dataset: A dataset object to slice.
-            start: Starting position.
-            stop: Stopping position.
-            name: Name of the dataset.
+            dataset: a dataset to slice.
+            start: starting position.
+            stop: stopping position.
+            name:
         """
         super().__init__(dataset, name)
         if start is not None and not (start >= 0):
-            raise ValueError(f'start for Slice must be a non-negative integer or None, got {start} instead.')
+            raise ValueError(f'start ({start}) for Slice must be a non-negative integer or None.')
         if stop is not None and not (stop >= 0):
-            raise ValueError(f'stop for Slice must be a non-negative integer or None, got {stop} instead.')
+            raise ValueError(f'stop ({stop}) for Slice must be a non-negative integer or None.')
         if step is not None and not (step > 0):
-            raise ValueError(f'step for Slice must be a positive integer or None, got {step} instead.')
+            raise ValueError(f'step ({step}) for Slice must be a positive integer or None.')
 
         start = start or 0
-        stop = len(dataset) if stop is None else min(len(dataset), stop)
         step = step or 1
 
-        self._size = max(0, math.ceil((stop - start) / step))
         self._start = start
         self._stop = stop
         self._step = step
 
-    def __len__(self):
-        return self._size
+    @property
+    def length(self):
+        if self._length is None:
+            self._length = max(0, math.ceil((len(self._dataset) - self._start) / self._step))
+        return self._length
 
     def generator(self):
-        it = iter(self._dataset)
-        it = itertools.islice(it, self._start, self._stop, self._step)
-        for x in it:
+        for x in itertools.islice(self._dataset, self._start, self._stop, self._step):
             yield x
-
-    def state(self) -> dict:
-        state = super().state()
-        return state
-
-    def load(self, state: dict) -> None:
-        super().load(state)
-
-    def _reset(self) -> None:
-        super()._reset()
 
 
 class Shard(Slice):
-    """Shards the dataset.
+    """Shard the dataset.
 
-    Sharding means we split the dataset sequentially into several mutual exclusive partitions, and loads only one of
-    the specific partition. This is typically used in distributed settings, where we want to ensure our training
+    This dataset partitions elements alternately into several exclusive partitions and only one specific partition
+    is loaded. This is typically used in distributed settings, where we want to ensure our training
     workers process different parts of the training data.
 
-    For example in worker-0:
+    For example, in worker-0:
         ds = TextLine(filename)
         ds = ds.shard(2, 0)
 
@@ -609,75 +620,100 @@ class Shard(Slice):
         ds = ds.shard(2, 1)
     """
 
-    def __init__(self, dataset: Dataset, num_shards: int, index: int, name: str = None):
+    def __init__(self, dataset: Dataset, num_shards: int, shard_index: int, name: str = None):
         """Initialises the dataset.
         Args:
-            dataset: A dataset object to shard.
-            num_shards: Number of total shards.
-            index: Index of current shard.
-            name: Name of the sharded dataset.
+            dataset: a dataset object to shard.
+            num_shards: number of total shards.
+            shard_index: index of current shard.
+            name:
         """
-        if not (index >= 0):
-            raise ValueError(f'index ({index}) must be an non-negative integer.')
-        if not (index < num_shards):
-            raise ValueError(f'index ({index}) must be smaller than num_shards ({num_shards}).')
-        if len(dataset) < num_shards:
-            raise ValueError(f'num_shards ({num_shards}) must be less than or equal to dataset size ({len(dataset)}).')
-        super().__init__(dataset, index, None, num_shards)
+        if not (shard_index >= 0):
+            raise ValueError(f'shard_index ({shard_index}) must be an non-negative integer.')
+        if not (shard_index < num_shards):
+            raise ValueError(f'shard_index ({shard_index}) must be smaller than num_shards ({num_shards}).')
+
+        super().__init__(dataset, shard_index, None, num_shards, name)
 
 
-class Enumerate(Nested):
+class Enumerate(NestedSizable):
     """Enumerate a dataset.
 
-    Simulates the builtin enumerate function and attach an index to each element in the given dataset.
+    This dataset simulates the builtin `enumerate` and attach an index to each element in the given dataset.
     """
 
     def __init__(self, dataset: Dataset, start: int = 0, name: str = None):
         super().__init__(dataset, name)
         self._start = start
 
-    def __len__(self):
-        return len(self._dataset)
-
     def generator(self):
         for x in enumerate(self._dataset, self._start):
             yield x
 
 
-class Chunk(Nested):
+class Group(NestedSizable):
+    """Group consecutive elements into an element."""
 
-    def __init__(self, dataset: Dataset, chunk_size: int, name: str = None):
-        if not (chunk_size >= 1):
-            raise ValueError(f'chunk_size ({chunk_size}) must be greater than 1.')
+    def __init__(self, dataset: Dataset, group_size: int, name: str = None):
+        if not (group_size >= 1):
+            raise ValueError(f'group_size ({group_size}) must be a positive integer greater than 1.')
+
         super().__init__(dataset, name)
-        self._chunk_size = chunk_size
+
+        self._group_size = group_size
+
+    @property
+    def length(self):
+        if self._length is None:
+            self._length = math.ceil(len(self._dataset) / self._group_size)
+        return self._length
 
     def generator(self):
         it = iter(self._dataset)
         stopped = False
         while not stopped:
-            chunk = []
-            for _ in range(self._chunk_size):
+            group = []
+            for _ in range(self._group_size):
                 try:
-                    chunk.append(next(it))
+                    group.append(next(it))
                 except StopIteration:
                     stopped = True
                     break
-            if chunk:
-                yield chunk
+            if group:
+                yield group
 
 
-class Concat(NestedN):
-    """Concat dataset.
+class Flatten(Nested):
+    """Flatten the element of a dataset into multiple elements.
 
-    Concatenates multiple datasets.
+    The size of this dataset can't be determined in advance because we have to flatten every element from the wrapped
+    dataset to know the exact size after flattening.
+    """
+
+    def __init__(self, dataset: Dataset, name: str = None):
+        super().__init__(dataset, name)
+
+    def generator(self):
+        for chunk in self._dataset:
+            for x in chunk:
+                yield x
+
+
+class Concat(NestedN, Sizable):
+    """Concat multiple datasets.
+
+    This dataset is a concatenation of multiple datasets.
     """
 
     def __init__(self, datasets: Iterable[Dataset], name: str = None):
         super().__init__(list(datasets), name)
+        self._length = None
 
-    def __len__(self):
-        return sum(map(len, self._datasets))
+    @property
+    def length(self):
+        if self._length is None:
+            self._length = sum(map(len, self._datasets))
+        return self._length
 
     def generator(self):
         for x in itertools.chain(*self._datasets):

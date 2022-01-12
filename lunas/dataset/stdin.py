@@ -9,9 +9,9 @@ __all__ = ['Stdin']
 class Stdin(core.Dataset):
     """Stdin dataset.
 
-    This is a wrapper for `sys.stdin`.
+    This dataset wraps `sys.stdin`.
 
-    Warning: Never use this dataset in multiprocessing context in order not to observe unexpected behaviours since
+    Never use this dataset in multiprocessing context in order not to observe unexpected behaviours since
     the correctness is not guaranteed.
     """
 
@@ -21,9 +21,6 @@ class Stdin(core.Dataset):
             sentinel = ''
         self._sentinel = sentinel + os.linesep
         self._resumable = False
-
-    def __len__(self):
-        return sys.maxsize
 
     def generator(self):
         for x in sys.stdin:

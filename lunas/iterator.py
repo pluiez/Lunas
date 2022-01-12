@@ -25,16 +25,17 @@ except ImportError:
         ...
 
 
-class BatchIterator(abc.ABC, _IterableDataset):
+class BatchIterator(_IterableDataset, abc.ABC):
 
-    def __init__(self, data_source: Iterable) -> None:
+    def __init__(self, data_source: Union[core.Dataset, BatchIterator]) -> None:
         """Initialises the iterator.
 
         Args:
-            data_source: An iterable object.
+            data_source: an instance of Dataset or BatchIterator.
         """
-        if not (isinstance(data_source, core.Dataset) or isinstance(data_source, BatchIterator)):
-            raise TypeError(f'invalid dataset with type: "{type(data_source)}"')
+        if not isinstance(data_source, (core.Dataset, BatchIterator)):
+            raise TypeError(f'dataset ({type(data_source)}) must be instance of Dataset or BatchIterator.')
+
         self._data_source = data_source
 
     @abc.abstractmethod
@@ -68,15 +69,15 @@ class BatchIterator(abc.ABC, _IterableDataset):
 
 
 class DataLoader(object):
-    """Loads and batches data.
+    """Load and batch data.
 
     DataLoader wraps around a BatchIterator instance, batches multiple samples and optionally moves the data to pinned
     memory.
 
-    This DataLoader relies on PyTorch's carefully designed DataLoader to implement secure multi-processing operations.
-    Since in a naive implementation, the main Python process can lose connection with one of the multiprocessing
-    process if it crashed, for example, by segment fault. However, PyTorch's DataLoader deals with this problem by
-    tracking each process's states manually. Here we can reuse it for simplicity.
+    This DataLoader relies on PyTorch's carefully designed `DataLoader` to implement safe multiprocessing operations.
+    Since in a naive implementation, the main Python process can lose connection with child processes if one of them
+    crashed, for example, by segment fault. However, PyTorch's DataLoader deals with this problem by tracking each
+    process's states manually. Here we reuse it for simplicity.
     """
 
     def __init__(
@@ -86,11 +87,12 @@ class DataLoader(object):
             collate_fn: Callable[[List], Any] = None,
             pin_memory: bool = False,
             timeout: int = 0,
-            worker_init_fn=None,
+            worker_init_fn: Callable[[int], None] = None,
             multiprocessing_context=None
     ):
         if not isinstance(batch_iterator, BatchIterator):
-            raise TypeError(f'invalid instance with type: "{type(batch_iterator)}"')
+            raise TypeError(f'batch_iterator ({type(batch_iterator)}) must be instance of BatchIterator.')
+
         self._batch_iterator = batch_iterator
         self._num_workers = num_workers
         self._collate_fn = collate_fn
@@ -99,22 +101,28 @@ class DataLoader(object):
         self._worker_init_fn = worker_init_fn
         self._multiprocessing_context = multiprocessing_context
         self._warning = False
-        rand_state = numpy.random.get_state()
-        self._base_seed = rand_state[1][0]
+
+        self._ptr = 0
+        self._resumed = False
 
     def state(self):
-        return self._batch_iterator.state()
+        return {'ptr': self._ptr}
 
     def load(self, state):
-        self._batch_iterator.load(state)
+        if not state:
+            return
+        self._ptr = state['ptr']
+        self._resumed = True
 
     def _init_worker(self, worker_id):
-        numpy.random.seed(self._base_seed)
+        numpy.random.seed(numpy.random.get_state()[1][0])
         if self._worker_init_fn is not None:
             self._worker_init_fn(worker_id)
 
     def __iter__(self):
-        self._base_seed += 1
+        if not self._resumed:
+            self._ptr = 0
+        self._resumed = False
         try:
             from torch.utils.data.dataloader import DataLoader as _DataLoader
             from torch.utils.data.dataset import IterableDataset as _IterableDataset
@@ -122,8 +130,10 @@ class DataLoader(object):
                                      collate_fn=self._collate_fn, pin_memory=self._pin_memory, timeout=self._timeout,
                                      worker_init_fn=self._init_worker,
                                      multiprocessing_context=self._multiprocessing_context)
-            for batch in dataloader:
+            for batch in itertools.islice(dataloader, self._ptr, None):
+                self._ptr += 1
                 yield batch
+
         except ImportError:
             if not self._warning:
                 self._warning = True
@@ -131,10 +141,12 @@ class DataLoader(object):
                     'Multi-worker dataloader requires PyTorch installation, since PyTorch is not available, '
                     'main thread will be used for loading data.')
 
-            for batch in self._batch_iterator:
+            for batch in itertools.islice(self._batch_iterator, self._ptr, None):
                 if self._collate_fn is not None:
                     batch = self._collate_fn(batch)
+                self._ptr += 1
                 yield batch
+        self._ptr = 0
 
 
 class _Queue(object):
@@ -178,9 +190,10 @@ def get_bucket_boundaries(inflation_rate: float = 1.1, inflation_offset: int = 0
 
     """
     if not (inflation_rate >= 1.0):
-        raise ValueError(f'a must be greater than 1.0: {inflation_rate}')
+        raise ValueError(f'inflation_rate ({inflation_rate})  must be greater than 1.0.')
     if not (inflation_offset >= 0):
-        raise ValueError(f'b must be greater than 1.0: {inflation_offset}')
+        raise ValueError(f'inflation_offset ({inflation_offset}) must be greater than 1.0.')
+
     x = min_length
     boundaries = []
     while x <= max_length:
@@ -198,7 +211,7 @@ def _resize_batch_size(num_sample, required_batch_size_multiple):
 class ConstantIterator(BatchIterator):
     """Constant-sized batch iterator.
 
-    Iterates by a constant number of samples for each batch.
+    This iterator iterates over batches composed of a constant number of consecutive samples.
 
     """
 
@@ -206,9 +219,9 @@ class ConstantIterator(BatchIterator):
         """Initialises the iterator.
 
         Args:
-            data_source: A dataset object as data source.
-            batch_size: Number of samples in a batch.
-            drop_tail: Whether to drop the tail samples if they don't form a full batch.
+            data_source: a dataset as data source.
+            batch_size: number of samples in a batch.
+            drop_tail: whether to drop the trailing samples if they don't form a full batch.
         """
         super().__init__(data_source)
         self._batch_size = batch_size
@@ -261,35 +274,35 @@ class BucketIterator(BatchIterator):
         """Initialises the iterator.
 
         Args:
-            data_source: A dataset object as data source.
-            batch_size: Batch size.
-            get_length_fn: A function to evaluate the size of a given sample.
-            bucket_boundaries: A list of ints that defines the buckets. Should be sorted in strictly ascending order.
-            min_length: An int value indicates the minimum length of a sample, used as a filter.
-            max_length: An int value indicates the maximum length of a sample, used as a filter.
-            drop_tail: Whether to drop the tail samples if they don't form a full batch.
+            data_source: a dataset object as data source.
+            batch_size: batch size.
+            get_length_fn: a function to evaluate the size of a given sample.
+            bucket_boundaries: a list of ints that defines the buckets. Should be sorted in strictly ascending order.
+            min_length: an int value indicates the minimum length of a sample, used as a filter.
+            max_length: an int value indicates the maximum length of a sample, used as a filter.
+            drop_tail: whether to drop the tail samples if they don't form a full batch.
             required_batch_size_multiple: adapts the actual batch size to be the multiple of this value.
             setting value to 8 to facilitate Tensor Core acceleration.
 
         """
         super().__init__(data_source)
         if not bucket_boundaries:
-            raise ValueError(f'bucket_boundaries must have at least one element: {bucket_boundaries}')
+            raise ValueError(f'bucket_boundaries ({bucket_boundaries}) must be non-empty.')
         if not (bucket_boundaries == sorted(bucket_boundaries)):
-            raise ValueError(f'bucket_boundaries must be in ascending order: {bucket_boundaries}')
+            raise ValueError(f'bucket_boundaries ({bucket_boundaries}) must be in ascending order.')
         if not (len(set(bucket_boundaries)) == len(bucket_boundaries)):
-            raise ValueError(f'bucket_boundaries must not contain duplicate elements: {bucket_boundaries}')
+            raise ValueError(f'bucket_boundaries ({bucket_boundaries}) must have unique elements.')
         if not callable(get_length_fn):
-            raise ValueError(f'instance of type "{type(get_length_fn)}" is not callable.')
+            raise ValueError(f'get_length_fn ({type(get_length_fn)}) must be callable.')
         if not (min_length <= bucket_boundaries[0]):
-            raise ValueError(f'expected min_length ({min_length}) <= bucket_boundaries[0] ({bucket_boundaries[0]},'
-                             f'got min_length = {min_length} instead.')
+            raise ValueError(f'min_length ({min_length}) must be less than or equal to '
+                             f'bucket_boundaries[0] ({bucket_boundaries[0]}).')
         if not (max_length is None or max_length >= bucket_boundaries[-1]):
-            raise ValueError(f'expected max_length ({max_length}) <= bucket_boundaries[-1] ({bucket_boundaries[-1]},'
-                             f'got max_length = {max_length} instead.')
+            raise ValueError(f'max_length ({max_length}) must be less than or equal to '
+                             f'bucket_boundaries[-1] ({bucket_boundaries[-1]}).')
         if not (required_batch_size_multiple > 0):
-            raise ValueError(f'expected required_batch_size_multiple as a positive value, '
-                             f'got {required_batch_size_multiple} instead.')
+            raise ValueError(f'required_batch_size_multiple ({required_batch_size_multiple}) '
+                             f'must be a positive integer.')
 
         max_length = max_length or bucket_boundaries[-1]
 
@@ -359,12 +372,15 @@ class BucketIterator(BatchIterator):
 
 
 class ShardedIterator(BatchIterator):
-    def __init__(self, data_source: BatchIterator, num_shards: int = 1, index: int = 0, drop_tail=False) -> None:
+    def __init__(self, data_source: BatchIterator, num_shards: int = 1, shard_index: int = 0, drop_tail=False) -> None:
         super().__init__(data_source)
-        if not (num_shards > index >= 0):
-            raise ValueError(f'Invalid num_shards and index: ({num_shards}, {index})')
+        if not (shard_index >= 0):
+            raise ValueError(f'shard_index ({shard_index}) must be an non-negative integer.')
+        if not (shard_index < num_shards):
+            raise ValueError(f'shard_index ({shard_index}) must be smaller than num_shards ({num_shards}).')
+
         self._num_shards = num_shards
-        self._index = index
+        self._shard_index = shard_index
         self._drop_tail = drop_tail
 
     def __iter__(self):
@@ -378,7 +394,7 @@ class ShardedIterator(BatchIterator):
                 if self._drop_tail:
                     break
             else:
-                samples = samples[self._index * shard_size:(self._index + 1) * shard_size]
+                samples = samples[self._shard_index * shard_size:(self._shard_index + 1) * shard_size]
             if samples:
                 yield samples
 

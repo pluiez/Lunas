@@ -6,25 +6,22 @@ import lunas.dataset.core as core
 __all__ = ['Sampling']
 
 
-class Sampling(core.NestedN):
+class Sampling(core.NestedN, core.Sizable):
     """Sampling dataset
 
-    Sample examples from multiple datasets by given weights.
+    This dataset sample examples from multiple datasets by given weights.
     """
 
-    def __init__(self,
-                 datasets: Iterable[core.Dataset],
-                 weights: Optional[Iterable[float]] = None,
-                 virtual_size: Optional[int] = None,
+    def __init__(self, datasets: Iterable[core.Dataset], weights: Iterable[float] = None, virtual_size: int = None,
                  name: str = None):
         super().__init__(datasets, name)
 
         datasets = self._datasets
 
         if weights and sum(weights) != 1:
-            raise ValueError(f'Expected the sum of weights to be 1.0, got {sum(weights)} instead.')
+            raise ValueError(f'The sum of weights ({sum(weights)}) must be 1.0.')
         if virtual_size is not None and virtual_size < 0:
-            raise ValueError(f'virtual size should be None or a non-negative value, got {virtual_size} instead.')
+            raise ValueError(f'virtual_size ({virtual_size}) must be a non-negative value or None.')
         if weights:
             for ds, weight in zip(datasets, weights):
                 if len(ds) == 0 and weight > 0:
@@ -43,7 +40,8 @@ class Sampling(core.NestedN):
         self._weights = weights
         self._virtual_size = virtual_size
 
-    def __len__(self):
+    @property
+    def length(self):
         return self._virtual_size
 
     def generator(self):

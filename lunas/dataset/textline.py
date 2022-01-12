@@ -20,10 +20,10 @@ def count_line(filename):
     return n
 
 
-class TextLine(core.Dataset):
+class TextLine(core.Dataset, core.Sizable):
     """TextLine dataset
 
-    Wraps a text file.
+    This dataset wraps a plain text file.
     """
 
     def __init__(self, filename: str, encoding: str = 'utf-8', name: str = None):
@@ -31,10 +31,11 @@ class TextLine(core.Dataset):
         filename = Path(filename)
         self._filename: Path = filename
         self._encoding = encoding
-        self._size = count_line(filename)
+        self._length = count_line(filename)
 
-    def __len__(self):
-        return self._size
+    @property
+    def length(self):
+        return self._length
 
     def generator(self):
         with self._filename.open('r', encoding=self._encoding) as r:
