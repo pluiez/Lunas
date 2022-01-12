@@ -1,6 +1,6 @@
 # Lunas
 
-[![PyPI version](https://img.shields.io/badge/pypi-v0.4.1-limegreen.svg)](https://github.com/pluiez/lunas)
+[![PyPI version](https://img.shields.io/badge/pypi-v0.4.2-limegreen.svg)](https://github.com/pluiez/lunas)
 
 **Lunas** is a Python based library that mimics TensorFlow's `dataset` API and 
 also its logics to build a data processing pipeline for arbitrary datasets.
