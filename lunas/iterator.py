@@ -15,8 +15,7 @@ import numpy
 
 import lunas.dataset.core as core
 
-__all__ = ['BatchIterator', 'ConstantIterator', 'BucketIterator', 'ShardedIterator', 'DataLoader',
-           'get_bucket_boundaries']
+__all__ = ['BatchIterator', 'ConstantIterator', 'BucketIterator', 'DataLoader', 'get_bucket_boundaries']
 
 try:
     from torch.utils.data.dataset import IterableDataset as _IterableDataset
