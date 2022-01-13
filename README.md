@@ -2,14 +2,18 @@
 
 [![PyPI version](https://img.shields.io/badge/pypi-v0.5.0-limegreen.svg)](https://github.com/pluiez/lunas)
 
-**Lunas** is a Python based library that mimics TensorFlow's `dataset` API and 
-also its logics to build a data processing pipeline for arbitrary datasets.
+**Lunas** is a Python based library that mimics TensorFlow's `dataset` API and also its logics to build a data
+processing pipeline for arbitrary datasets.
 
-The implementation mostly draws on TensorFlow but in a simplified and pure-Python fashion. 
+The implementation mostly draws on TensorFlow but in a simplified and pure-Python fashion.
 
-## Features 
+## License
 
-A `Dataset` represents a dataset and optionally holds specific custom operations on dataset elements. 
+This project uses [MIT](LICENSE) license.
+
+## Features
+
+A `Dataset` represents a dataset and optionally holds custom operations on dataset elements.
 
 The evaluation of operations are performed lazily, hence it's a trade-off for memory against speed.
 
@@ -24,37 +28,46 @@ Currently the following datasets are supported:
 5. `Enumerate`: wraps a dataset with index for each element, simulating builtin `enumerate`.
 6. `Zip`: wraps multiple datasets as one dataset and supports custom padding for varying-sized datasets.
 7. `Concat`: concatenates multiple datasets as one dataset.
-8. `Glob`: wraps the standard `glob.glob` as a dataset.
-9. `Map`: transforms elements by a given mapping function.
-10. `Where`: filters elements by a given predicate function.
-11. `Repeat`: repeats the dataset for multiple epochs.
-12. `Interleave`: maps a dataset into multiple datasets and interleave between the datasets.
-13. `Shuffle`: shuffles a dataset using a buffer for memory-efficient randomisation.
-14. `Sort`: sorts the dataset.
-15. `Slice`: slices the dataset.
-16. `Shard`: shards the dataset into different partitions.
-17. `Window`: iterates through the dataset using a sliding window. 
+8. `Group`: group several samples together.
+9. `Flatten`: flattens a sample into multiple samples.
+10. `Glob`: wraps the standard `glob.glob` as a dataset.
+11. `Map`: transforms elements by a given mapping function.
+12. `Where`: filters elements by a given predicate function.
+13. `Repeat`: repeats the dataset for multiple epochs.
+14. `Interleave`: maps a dataset into multiple datasets and interleave between the datasets.
+15. `Shuffle`: shuffles a dataset using a buffer for memory-efficient randomisation.
+16. `Sort`: sorts the dataset.
+17. `Slice`: slices the dataset.
+18. `Shard`: shards the dataset into different partitions.
+19. `Sampling`: draws samples from several datasets given a sampling distribution.
 
-Additionally, a chaining style dataset creation is available for 
-`Map`, `Where`, `Repeat`, `Shard`, `Shuffle`, `Sort`, `Slice`, and `Window`.
+Additionally, chaining-style dataset operation is available for following datasets:
+`Map`, `Where`, `Repeat`, `Shard`, `Shuffle`, `Sort`, `Slice`, `Enumerate`, `Group`, `Flatten` and `Concat`.
 
-For example, any dataset can invoke the following to create a dataset: 
+For example, a dataset can invoke the following to create a new dataset:
 
 ```python
-ds = Range(100).map(lambda x: 2 * x).where(lambda x: x < 50).take(10)
+ds = lunas.Range(100)
+.map(lambda x: 2 * x)
+.where(lambda x: x < 50)
+.shuffle(buffer_size=100)
+
+print(list(ds))
 ```
 
 ### Batch Iterators
 
-The batch iterators are provided to yield batches from a given dataset, including: 
+The batch iterators are provided to generate batches from a given dataset, currently including:
 
-1. `ConstantIterator`: yields a constant number of samples for each batch.
-2. `BucketIterator`: yields varying-sized batch, in which the size of each sample is determined by a given function. 
+1. `ConstantIterator`: generates batches with a constant number of samples.
+2. `BucketIterator`: generates varying-sized batches with sample size determined by a custom function.
 3. `DataLoader`: wraps PyTorch's `torch.utils.data.DataLoader` to provide multiprocessing data-loading features.
 
 ### Persistence
 
-Both datasets and batch iterators support persistence using `state()` and `load()` interface. `state()` takes a snapshot of the current iteration state into a dictionary, while `load()` restores iteration from a specific state later. 
+Both datasets and batch iterators support persistence using `state()` and `load()` interface.
+`state()` takes a checkpoint of current iteration state, while `load()` restores iteration state from a given
+checkpoint.
 
 ## Requirements
 
@@ -67,7 +80,7 @@ Both datasets and batch iterators support persistence using `state()` and `load(
 Install using pip:
 
 ```shell
-pip install lunas
+pip install -U lunas
 ```
 
 ## Basics
@@ -89,9 +102,9 @@ pip install lunas
    ```
 
     - A dataset can be scanned through for several epochs.
-    - Dataset.shuffle() performs a buffered shuffling. The shuffling does not happens at dataset creation, but rather begins when trying to access an element from the dataset. 
-    - Alternatively, `Dataset.repeat(2)` creates another dataset that 
-      iterates through the original dataset twice.
+    - Dataset.shuffle() performs a buffered shuffling. The shuffling does not happen immediately at dataset creation,
+      but rather begins when trying to access an element from the dataset.
+    - Alternatively, `Dataset.repeat(2)` creates another dataset that iterates through the original dataset twice.
 
 2. Build a data processing pipeline:
 
@@ -100,7 +113,7 @@ pip install lunas
    ds = Range(10).map(lambda x: x * 2).where(lambda x: x % 2 == 0)
    ```
 
-   - The chaining calls of a `Dataset` object defines a processing pipeline on the original dataset.
+    - The chaining calls of a `Dataset` object defines a processing pipeline on the original dataset.
 
 3. Deal with multiple data sources:
 
@@ -117,59 +130,60 @@ pip install lunas
    ds = Zip([ds3, ds4, ds5], mode='>', padding=True).map(lambda x, y, z: (x + y + z), unpack_args=True)
    ```
 
-   - Two datasets here are zipped as a `Zip` dataset. A `Zip` dataset returns a tuple from the internal child-datasets, that is `ds1` and `ds2`.
+    - Two datasets here are zipped as a `Zip` dataset. A `Zip` dataset returns a tuple from the internal child-datasets,
+      that is `ds1` and `ds2`.
 
-   - `Zip` requires strictly the datasets to be aligned by default. It also allows zipping multiple datasets of different sizes by providing additional `mode` and `paddinng` argument to indicate either padding smaller dataset or truncating bigger dataset.
+    - `Zip` requires strictly the datasets to be aligned by default. It also allows zipping multiple datasets of
+      different sizes by providing additional `mode` and `paddinng` argument to indicate either padding smaller dataset
+      or truncating bigger dataset.
 
-4. Example usage in a more complicated distributed Machine Translation training scenario:
+4. Example usage in a more complicated distributed multilingual Language Modeling training case:
 
    ```python
    from lunas import *
    
-   # tokenises source langauge
-   X = TextLine('train.fr').map(lambda x: x.split())
-   # tokenises target language
-   Y = TextLine('train.en').map(lambda x: x.split())
-   # Each worker holds a mutually different shard of the original dataset
-   # This should be done before shuffling to avoid unnecessary shuffling efforts in each workers.
-   ds = Zip(X, Y).shard(dist_word_size, dist_local_rank)
-   # Constructs a sample from the dataset
-   ds = ds.map(lambda x, y: {
-               'x': vocab_s.lookup(x), # convert token list into word indices
-               'y': vocab_t.lookup(y),
-               'size_x': len(x), # number of tokens in source language
-               'size_y': len(y), # number of tokens in target language
-           }, unpack_args=True
-       )
-   ds = ds.shuffle(100000)
-   # Repeats endlessly
-   ds = ds.repeat()
+   
+   corpus_paths = ['train.zh', 'train.en', 'train.ru']
+   sampling_weights = [0.3, 0.4, 0.3]
+      
+   # Shards a dataset so that each worker holds a unique shard of the original corpus.
+   # Sharding should be done before shuffling to avoid unnecessary shuffling efforts in each worker.
+   datasets = []
+   for corpus in corpus_paths:
+       ds = TextLine(corpus) \
+           .shard(dist_word_size, dist_local_rank) \
+           .shuffle(buffer_size=10000)
+       # Tokenizes plain text into token ids
+       ds = ds.map(lambda x: {'input': tokenizer.tokenize(x)})
+       # Group consecutive 128 samples together, then concat and split the samples in that group into the same length
+       # to reduce padding. Finally, flatten the samples group into separate samples.
+       ds = ds.group(group_size=128) \
+           .map(lambda xs: concat_and_split(xs, target_length=1024)) \
+           .flatten()
+   
+       datasets.append(ds)
+   # Defines a sampling strategy from the datasets
+   ds = Sampling(datasets, sampling_weights, virtual_size=1000000)
    
    batch_itr = BucketIterator(
-       ds, 
-       # each batch size is at most 4096
-       batch_size=4096, 
+       ds,
+       # each batch size has at most 4096 tokens
+       batch_size=4096,
        # size for each sample is measured in number of tokens in target language
-       get_length_fn=lambda sample: sample['size_y'],   
+       get_length_fn=lambda x: len(x),
        bucket_boundaries=get_bucket_boundaries()
    )
    
    dataloader = DataLoader(
-       batch_itr, 
-       batch_size=4096,
-       num_workers=6, 
+       batch_itr,
+       num_workers=6,
        collate_fn=collate_fn,
    )
    
-   it = iter(dataloader)
-   for _ in range(max_steps):
-       batch = cuda(next(it))
-       ...
-   
+   for epoch in range(max_epoch):
+       for bathc in dataloader:
+           ...
    ```
-
-   - It doesn't matter if you are not familiar with machine translation task, 
-     since this code should be simple enough to explain itself.
 
 5. Resume iteration:
 
@@ -188,29 +202,35 @@ pip install lunas
        ...
    ```
 
-   - `it` here can be a dataset or batch iterator object.
-   - `state()` returns a picklable dictionary, which can be loaded by `it.load()` to resume the iteration procedure later.
-   - lunas provides limited support for resumable iteration. Specifically, the iteration state is maintained by a counting pointer in `Dataset`. For those dataset implementations that manage iteration by internal buffering, such as `Shuffle`, `Sort`, `BucketIterator` and `DataLoader`, `load()` would NOT recover the dataset elements in the buffer.
+    - `it` here can be a dataset or batch iterator object.
+    - `state()` returns a picklable dictionary, which can be loaded by `it.load()` to resume the iteration.
+    - lunas provides limited support for resumable iteration. Specifically, the iteration state is maintained by a
+      counting pointer in `Dataset`. For those dataset implementations that manage iteration by internal buffering, such
+      as `Shuffle`, `Sort` and `BucketIterator`, `load()` would loss content in the buffer.
 
 6. Extend the dataset:
 
-   - You can refer to the implementation of `TextLine` to customize your own data dataset.
+    - You can refer to the implementation of `TextLine` to customize your own data dataset.
 
 ## Known issues
 
-1. Parallel processing is not yet supported due to Python's limited support for parallelization. 
+1. Parallel processing is not yet supported due to Python's limited support for parallelization.
 
-   Multi-threading can be helpful for resource-intensive data loading operations, but not for CPU-intensive data processing operations. Whereas multi-processing is facilitates CPU-intensive scenarios, there are a few limitations, which further introduce complexity in the use of the library. 
+   Multi-threading can be helpful for resource-intensive data loading operations, but not for CPU-intensive data
+   processing operations. Whereas multi-processing is facilitates CPU-intensive scenarios, there are a few limitations,
+   which further introduce complexity in the use of the library.
 
-   Although it won't cause any difference for lunas APIs, the users will have to pay more attention in order to ensure multi-processing work correctly. For example, multi-processing does not accept lambda expressions and any unpicklable objects as arguments. The more severe problem is that once the child-process terminated with certain fatal errors (for example, a segment fault),  the parent process will never be notified the termination of the child. It thus requires extra efforts on accounting the states of child processes and 
-   the standard `multiprocessing` library does not come to use. 
+   Although it won't cause any difference for lunas APIs, the users will have to pay more attention in order to ensure
+   multi-processing work correctly. For example, multi-processing does not accept lambda expressions and any unpicklable
+   objects as arguments. The more severe problem is that once the child-process terminated with certain fatal errors (
+   for example, a segment fault), the parent process will never be notified the termination of the child. It thus
+   requires extra efforts on accounting the states of child processes and the standard `multiprocessing` library does
+   not come to use.
 
    We are likely to opt to C++ based implementation for parallelization features just as TensorFlow did.
 
 2. Stdin dataset cannot be used in potential multiprocessing context.
 
-   multiprocessing can mess up standard input since we can't distribute /dev/stdin to multiple processes with trivial implementation. Furthermore, there seems to be little preferential needs to spread stdin to multiple processes, so the problem is simply left aside.
-
-## License
-
-[MIT License](https://github.com/pluiez/Lunas/LICENSE)
+   multiprocessing can mess up standard input since we can't distribute /dev/stdin to multiple processes with trivial
+   implementation. Furthermore, there seems to be little preferential needs to spread stdin to multiple processes, so
+   the problem is simply left aside.

@@ -206,13 +206,13 @@ class Dataset(abc.ABC):
         """
         return Enumerate(self, start, name)
 
-    def group(self, chunk_size: int, name: str = None) -> Group:
+    def group(self, group_size: int, name: str = None) -> Group:
         """See `Group` class.
 
         Returns:
             A `Group` dataset.
         """
-        return Group(self, chunk_size, name)
+        return Group(self, group_size, name)
 
     def flatten(self, name: str = None) -> Flatten:
         """See `Flatten` class.
