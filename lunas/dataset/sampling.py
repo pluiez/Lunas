@@ -12,28 +12,27 @@ class Sampling(core.NestedN, core.Sizable):
     This dataset sample examples from multiple datasets by given weights.
     """
 
-    def __init__(self, datasets: Iterable[core.Dataset], weights: Iterable[float] = None, virtual_size: int = None,
+    def __init__(self, datasets: Iterable[core.Dataset], weights: Iterable[float] = None, sizes: Iterable[int] = None, virtual_size: int = None,
                  name: str = None):
         super().__init__(datasets, name)
 
         datasets = self._datasets
 
-        if weights and sum(weights) != 1:
-            raise ValueError(f'The sum of weights ({sum(weights)}) must be 1.0.')
+        if weights:
+            if sum(weights) != 1:
+                raise ValueError(f'The sum of weights ({sum(weights)}) must be 1.0.')
+            if min(weights) < 0:
+                raise ValueError(f'weights ({min(weights)}) must be non-negative value.')
+
         if virtual_size is not None and virtual_size < 0:
             raise ValueError(f'virtual_size ({virtual_size}) must be a non-negative value or None.')
-        if weights:
-            for ds, weight in zip(datasets, weights):
-                if len(ds) == 0 and weight > 0:
-                    raise ValueError(f'Attempt to sample from an empty dataset '
-                                     f'with a non-zero weight ({weight}).')
-
-        sizes = [len(ds) for ds in datasets]
 
         weights = weights if weights else [1.0 / len(datasets)] * len(datasets)
 
         max_weight_i, _ = max(enumerate(weights), key=lambda i_weight: i_weight[1])
         if virtual_size is None:
+            if sizes is None:
+                sizes = [len(ds) for ds in datasets]
             virtual_size = int(sizes[max_weight_i] / weights[max_weight_i])
             virtual_size = sum(int(virtual_size * weight) for weight in weights)
 
